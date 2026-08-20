@@ -1,6 +1,7 @@
 {
   "name": "auction-house",
   "private": true,
+  "type": "module",
   "workspaces": [
     "server",
     "web"

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import pg from 'pg';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import type { AuctionClosedEvent } from './auctionClose.js';
+import type { Database } from './db/index.js';
+import { notificationDeliveries } from './db/schema.js';
 
 export type OutcomeNotification = {
   notificationId: string;
@@ -14,19 +16,13 @@ export type OutcomeNotification = {
   winner: AuctionClosedEvent['winner'];
 };
 
-type PendingDeliveryRow = {
-  id: string;
-  recipient_user_id: number;
-  recipient_role: 'seller' | 'winner';
-};
-
 export async function deliverAuctionOutcome({
-  pool,
+  db,
   event,
   now,
   emit,
 }: {
-  pool: pg.Pool;
+  db: Database;
   event: AuctionClosedEvent;
   now: Date;
   emit: (userId: number, notification: OutcomeNotification) => void | Promise<void>;
@@ -36,52 +32,50 @@ export async function deliverAuctionOutcome({
   ];
   if (event.winner) recipients.push({ userId: event.winner.userId, role: 'winner' });
 
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
+  await db.transaction(async (tx) => {
     for (const recipient of recipients) {
-      await client.query(
-        `INSERT INTO notification_deliveries (
-           id, outbox_event_id, recipient_user_id, recipient_role, created_at
-         ) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (outbox_event_id, recipient_user_id) DO NOTHING`,
-        [randomUUID(), event.eventId, recipient.userId, recipient.role, now],
-      );
+      await tx.insert(notificationDeliveries).values({
+        id: randomUUID(),
+        outboxEventId: event.eventId,
+        recipientUserId: recipient.userId,
+        recipientRole: recipient.role,
+        createdAt: now,
+      }).onConflictDoNothing({
+        target: [notificationDeliveries.outboxEventId, notificationDeliveries.recipientUserId],
+      });
     }
-    await client.query('COMMIT');
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 
-  const pending = await pool.query<PendingDeliveryRow>(
-    `SELECT id::text, recipient_user_id, recipient_role
-     FROM notification_deliveries
-     WHERE outbox_event_id = $1 AND emitted_at IS NULL
-     ORDER BY created_at, id`,
-    [event.eventId],
-  );
+  const pending = await db.select({
+    id: notificationDeliveries.id,
+    recipientUserId: notificationDeliveries.recipientUserId,
+    recipientRole: notificationDeliveries.recipientRole,
+  })
+    .from(notificationDeliveries)
+    .where(and(
+      eq(notificationDeliveries.outboxEventId, event.eventId),
+      isNull(notificationDeliveries.emittedAt),
+    ))
+    .orderBy(asc(notificationDeliveries.createdAt), asc(notificationDeliveries.id));
   const emitted: string[] = [];
-  for (const delivery of pending.rows) {
-    await emit(delivery.recipient_user_id, {
+  for (const delivery of pending) {
+    await emit(delivery.recipientUserId, {
       notificationId: delivery.id,
       eventId: event.eventId,
-      recipientUserId: delivery.recipient_user_id,
-      recipientRole: delivery.recipient_role,
+      recipientUserId: delivery.recipientUserId,
+      recipientRole: delivery.recipientRole,
       slug: event.slug,
       title: event.title,
       endsAt: event.endsAt,
       closedAt: event.closedAt,
       winner: event.winner,
     });
-    await pool.query(
-      `UPDATE notification_deliveries
-       SET emitted_at = $1
-       WHERE id = $2 AND emitted_at IS NULL`,
-      [now, delivery.id],
-    );
+    await db.update(notificationDeliveries)
+      .set({ emittedAt: now })
+      .where(and(
+        eq(notificationDeliveries.id, delivery.id),
+        isNull(notificationDeliveries.emittedAt),
+      ));
     emitted.push(delivery.id);
   }
   return emitted;

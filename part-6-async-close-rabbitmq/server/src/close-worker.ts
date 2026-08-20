@@ -1,13 +1,13 @@
 import './otel.js';
 import * as amqp from 'amqplib';
-import pg from 'pg';
 import { closeDueAuctions } from './auctionClose.js';
+import { createDatabase } from './db/index.js';
 import { ensureAuctionEventTopology, publishPendingOutbox } from './outboxPublisher.js';
 
 const connectionString = process.env.DATABASE_URL
   ?? 'postgres://auction:auction@localhost:55432/auction_part_6';
 const rabbitmqUrl = process.env.RABBITMQ_URL ?? 'amqp://auction:auction@localhost:56726';
-const pool = new pg.Pool({ connectionString, connectionTimeoutMillis: 1_000 });
+const { db, pool } = createDatabase(connectionString);
 let stopping = false;
 
 function requestStop() {
@@ -33,8 +33,8 @@ try {
   while (!stopping) {
     try {
       const now = new Date();
-      const closed = await closeDueAuctions({ pool, now });
-      const published = await publishPendingOutbox({ pool, channel, now });
+      const closed = await closeDueAuctions({ db, now });
+      const published = await publishPendingOutbox({ db, channel, now });
       if (closed.length > 0) {
         console.info(`Closed ${closed.length} auction${closed.length === 1 ? '' : 's'}`);
       }
