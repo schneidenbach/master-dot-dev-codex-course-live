@@ -1,0 +1,17 @@
+{
+  "name": "auction-house",
+  "private": true,
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "db:up": "../scripts/workshop-db up auction_part_2",
+    "db:down": "../scripts/workshop-db drop auction_part_2",
+    "db:reset": "npm run db:down && npm run db:up && npm run migrate",
+    "migrate": "DATABASE_URL=postgres://auction:auction@localhost:55432/auction_part_2 npm run migrate --workspace server",
+    "dev": "API_PORT=3102 WEB_PORT=5102 DATABASE_URL=postgres://auction:auction@localhost:55432/auction_part_2 concurrently -k -n server,web \"npm run dev --workspace server\" \"npm run dev --workspace web\"",
+    "start": "npm run db:up && npm run migrate && npm run dev",
+    "test": "DATABASE_URL=postgres://auction:auction@localhost:55432/auction_part_2 npm run test --workspace server && npm run test --workspace web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
