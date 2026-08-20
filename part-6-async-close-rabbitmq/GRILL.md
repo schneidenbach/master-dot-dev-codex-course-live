@@ -464,6 +464,10 @@ Verification completed:
 - Three headless Microsoft Edge workflows pass: authoritative winner/no-bid close display,
   the four-session RabbitMQ seller/winner notification path with duplicate redelivery, and the
   inherited live-bid watcher flow.
+- The headed four-window Microsoft Edge Bidding War passes against the complete Slice 2 stack.
+  Its accepted history was `$101`, `$102`, `$103`, `$104`, `$106`, `$107`, with no duplicate
+  amounts; post-deadline `$108` attempts were rejected, and the tiled seller and bidder windows
+  were left open on the protected final outcome and recipient modals for review.
 
 Automated backoff, dead-letter handling, offline notification retrieval, seller-only workflows
 beyond the close outcome, and production authentication remain outside both slices.
