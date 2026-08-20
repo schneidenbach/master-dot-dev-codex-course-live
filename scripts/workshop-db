@@ -1,0 +1,42 @@
+#!/bin/sh
+
+set -eu
+
+action=${1:-}
+database=${2:-}
+
+case "$database" in
+  auction_part_[1-8]) ;;
+  *)
+    echo "Expected a workshop database name from auction_part_1 through auction_part_8." >&2
+    exit 1
+    ;;
+esac
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+compose() {
+  docker compose -f "$repo_root/docker-compose.yml" "$@"
+}
+
+ensure_postgres() {
+  compose up -d --wait postgres
+}
+
+case "$action" in
+  up)
+    ensure_postgres
+    if ! compose exec -T postgres psql -U auction -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname = '$database'" | grep -q 1; then
+      compose exec -T postgres createdb -U auction "$database"
+    fi
+    ;;
+  drop)
+    ensure_postgres
+    compose exec -T postgres dropdb -U auction --if-exists --force "$database"
+    ;;
+  *)
+    echo "Usage: $0 {up|drop} auction_part_N" >&2
+    exit 1
+    ;;
+esac
