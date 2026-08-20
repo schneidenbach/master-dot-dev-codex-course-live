@@ -1,4 +1,6 @@
-import { buildStripeApp } from './app.js';
+import './otel.js';
+
+const { buildStripeApp } = await import('./app.js');
 
 const port = Number(process.env.STRIPE_PORT ?? 7107);
 const app = buildStripeApp({

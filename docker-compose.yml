@@ -45,7 +45,7 @@ services:
   jaeger:
     image: jaegertracing/all-in-one:1.76.0
     environment:
-      COLLECTOR_OTLP_HTTP_CORS_ALLOWED_ORIGINS: "http://localhost:5106,http://127.0.0.1:5106,http://bidder-two.localhost:5106,http://bidder-three.localhost:5106,http://localhost:5107,http://127.0.0.1:5107,http://bidder-two.localhost:5107,http://bidder-three.localhost:5107"
+      COLLECTOR_OTLP_HTTP_CORS_ALLOWED_ORIGINS: "http://localhost:5106,http://127.0.0.1:5106,http://bidder-two.localhost:5106,http://bidder-three.localhost:5106,http://localhost:5107,http://127.0.0.1:5107,http://bidder-two.localhost:5107,http://bidder-three.localhost:5107,http://localhost:5108,http://127.0.0.1:5108,http://bidder-two.localhost:5108,http://bidder-three.localhost:5108"
       COLLECTOR_OTLP_HTTP_CORS_ALLOWED_HEADERS: "Content-Type"
     command:
       - "--collector.otlp.enabled=true"

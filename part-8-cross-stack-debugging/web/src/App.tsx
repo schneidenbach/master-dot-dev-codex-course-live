@@ -1,0 +1,197 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { watchAuctionCloseOutcome } from './auctionClose';
+import { watchAuctionDeadline } from './auctionDeadline';
+import { createRefreshCoalescer, watchAuctionChanges } from './liveAuction';
+
+import {
+  type AuctionItem,
+  createCheckout,
+  type DemoUser,
+  fetchAuction,
+  fetchAuctions,
+  fetchCheckoutState,
+  fetchUsers,
+  formatCurrency,
+  formatTimeLeft,
+} from './catalog';
+import { BidForm } from './components/BidForm';
+import { NewAuctionPage } from './components/NewAuctionPage';
+import { OutcomeModal } from './components/OutcomeModal';
+import { ProductArt } from './components/ProductArt';
+import { ProductCard } from './components/ProductCard';
+import { SiteHeader } from './components/SiteHeader';
+import { activeUserStorageKey, UserSwitcher } from './components/UserSwitcher';
+import {
+  enqueueOutcomeNotification,
+  type OutcomeNotification,
+  rememberOutcomeNotification,
+  watchOutcomeNotifications,
+} from './outcomeNotifications';
+
+function Status({ message, error = false }: { message: string; error?: boolean }) {
+  return <div className="page-status" role={error ? 'alert' : 'status'}><p>{message}</p>{error && <button onClick={() => window.location.reload()}>Try again</button>}</div>;
+}
+
+function useAuctionNow(endsAt: string | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!endsAt) return undefined;
+    return watchAuctionDeadline(endsAt, setNow);
+  }, [endsAt]);
+  return now;
+}
+
+function useAuctionList(query = '') {
+  const [items, setItems] = useState<AuctionItem[] | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setItems(null);
+    setError('');
+    void fetchAuctions(query).then(setItems).catch(() => setError('Could not load auctions.'));
+  }, [query]);
+  return { items, error };
+}
+
+function HomePage() {
+  const { items, error } = useAuctionList();
+  return <><section className="hero container"><div><p className="eyebrow">Compute deserves a second life</p><h1>Serious hardware.<br />Less serious prices.</h1><p>Bid on tested server equipment from data centers and operators across the country.</p><a className="hero-action" href="/search">Browse all auctions <span>→</span></a></div><div className="hero-rack" aria-hidden="true"><span className="rack-light one" /><span className="rack-light two" /><span className="rack-light three" /><div className="rack-unit"><b>GPU–08</b><i /><i /><i /><i /></div><div className="rack-unit"><b>CORE–96</b><i /><i /><i /><i /></div><div className="rack-unit"><b>MEM–1.5T</b><i /><i /><i /><i /></div></div></section><section className="catalog-section container"><div className="section-heading"><div><p className="eyebrow">Ending soon</p><h2>Equipment worth watching</h2></div><a href="/search">View all auctions <span>→</span></a></div>{error ? <Status message={error} error /> : items ? <div className="product-grid">{items.map((item) => <ProductCard key={item.slug} item={item} />)}</div> : <Status message="Loading auctions…" />}</section></>;
+}
+
+function SearchPage({ query }: { query: string }) {
+  const { items, error } = useAuctionList(query);
+  return <main className="search-page container"><div className="breadcrumbs"><a href="/">Home</a><span>/</span><span>Search</span></div><div className="search-heading"><div><p className="eyebrow">Catalog</p><h1>{query ? `Results for “${query}”` : 'All auctions'}</h1><p>{items ? `${items.length} live ${items.length === 1 ? 'auction' : 'auctions'}` : 'Searching…'}</p></div><select aria-label="Sort auctions" defaultValue="ending"><option value="ending">Ending soonest</option><option>Price: low to high</option><option>Most bids</option></select></div>{error ? <Status message={error} error /> : !items ? <Status message="Searching auctions…" /> : items.length ? <div className="product-grid search-results">{items.map((item) => <ProductCard key={item.slug} item={item} />)}</div> : <div className="empty-state"><h2>No equipment found</h2><p>Try a broader term, like “GPU” or “memory.”</p><a href="/search">View all auctions</a></div>}</main>;
+}
+
+function BidHistory({ item }: { item: AuctionItem }) {
+  const bids = item.bidHistory ?? [];
+  return <section className="bid-history-section"><div className="bid-history-heading"><div><p className="eyebrow">Activity</p><h2>Bid history</h2></div><span>{bids.length} accepted {bids.length === 1 ? 'bid' : 'bids'}</span></div>{bids.length ? <div className="bid-history-list">{bids.map((bid) => <article key={bid.id}><span className="bid-history-avatar">{bid.bidder.displayName.charAt(0)}</span><div><strong>{bid.bidder.displayName}</strong><span>@{bid.bidder.handle}</span></div><div><strong>{formatCurrency(bid.amountCents)}</strong><time dateTime={bid.createdAt}>{new Date(bid.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</time></div></article>)}</div> : <div className="bid-history-empty"><strong>No bids yet</strong><span>Be the first bidder on this equipment.</span></div>}</section>;
+}
+
+function ItemPage({ slug, activeUser }: { slug: string; activeUser: DemoUser | null }) {
+  const [item, setItem] = useState<AuctionItem | null>(null);
+  const [error, setError] = useState('');
+  const [checkoutStatus, setCheckoutStatus] = useState<'loading' | 'required' | 'pending' | 'awaiting_payment' | 'paid' | 'error'>('loading');
+  const [checkoutError, setCheckoutError] = useState('');
+  const [checkoutPending, setCheckoutPending] = useState(false);
+  const now = useAuctionNow(item?.endsAt ?? null);
+
+  const loadAuction = useCallback(async () => {
+    const auction = await fetchAuction(slug);
+    setItem(auction);
+    document.title = `${auction.title} · Auction House`;
+  }, [slug]);
+  const refreshAuction = useMemo(() => createRefreshCoalescer(loadAuction), [loadAuction]);
+
+  useEffect(() => {
+    setError('');
+    void refreshAuction().catch(() => setError('Auction not found or unavailable.'));
+    return watchAuctionChanges(slug, () => {
+      void refreshAuction().catch(() => undefined);
+    });
+  }, [refreshAuction, slug]);
+
+  useEffect(() => {
+    if (!item) return undefined;
+    return watchAuctionCloseOutcome(item.endsAt, item.closedAt, refreshAuction);
+  }, [item?.closedAt, item?.endsAt, refreshAuction]);
+
+  const isWinner = Boolean(item?.closedAt && item.winningBid && activeUser
+    && item.winningBid.bidder.id === activeUser.id);
+  const isSeller = Boolean(item?.closedAt && item.winningBid && activeUser
+    && item.seller.id === activeUser.id);
+  useEffect(() => {
+    setCheckoutError('');
+    if ((!isWinner && !isSeller) || !activeUser) {
+      setCheckoutStatus('loading');
+      return;
+    }
+    setCheckoutStatus('loading');
+    let active = true;
+    const refreshPayment = () => {
+      void fetchCheckoutState(slug, activeUser.id)
+        .then((state) => { if (active) setCheckoutStatus(state.status); })
+        .catch(() => { if (active) setCheckoutStatus('error'); });
+    };
+    refreshPayment();
+    const interval = window.setInterval(refreshPayment, 2_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [activeUser?.id, isSeller, isWinner, slug]);
+
+  async function beginCheckout() {
+    if (!activeUser || checkoutPending) return;
+    setCheckoutPending(true);
+    setCheckoutError('');
+    try {
+      const checkout = await createCheckout(slug, activeUser.id);
+      window.location.assign(checkout.checkoutUrl);
+    } catch (checkoutFailure) {
+      setCheckoutError(checkoutFailure instanceof Error ? checkoutFailure.message : 'Checkout is temporarily unavailable.');
+      setCheckoutPending(false);
+    }
+  }
+
+  if (error) return <Status message={error} error />;
+  if (!item) return <Status message="Loading auction…" />;
+  const timeLeft = formatTimeLeft(item.endsAt, now);
+
+  const checkoutReturn = new URLSearchParams(window.location.search).get('checkout');
+  return <main className="item-page container"><div className="breadcrumbs"><a href="/">Home</a><span>/</span><a href={`/search?q=${encodeURIComponent(item.category)}`}>{item.category}</a><span>/</span><span>{item.title}</span></div><div className="item-layout"><div className="item-gallery"><ProductArt kind={item.art} label={`Illustration of ${item.title}`} /><div className="thumbnail-row"><button className="selected"><ProductArt kind={item.art} label="Main view" /></button><button><span>+</span><small>More photos soon</small></button></div></div><section className="item-summary"><p className="product-category">{item.category} · {item.condition}</p><h1>{item.title}</h1><p className="item-kicker">{item.kicker}</p><div className="auction-panel"><div className="current-price"><span>{item.closedAt ? 'Final price' : item.bidCount ? 'Current bid' : 'Starting price'}</span><strong>{formatCurrency(item.currentPriceCents)}</strong><small>{item.bidCount} {item.bidCount === 1 ? 'bid' : 'bids'}</small></div>{item.closedAt ? <div className="auction-outcome" role="status"><span>Final outcome</span><strong>{item.winningBid ? `@${item.winningBid.bidder.handle} won with ${formatCurrency(item.winningBid.amountCents)}` : 'Ended without bids'}</strong><small>Closed {new Date(item.closedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</small></div> : <><div className="bidder"><span>Current bidder</span><strong>{item.currentBidder ? `@${item.currentBidder}` : 'No bids yet'}</strong></div><div className="ending"><span>Time left</span><strong>{timeLeft}</strong></div></>}<BidForm item={item} activeUser={activeUser} onRefresh={refreshAuction} />{isWinner && <section className={`winner-checkout ${checkoutStatus === 'paid' ? 'paid' : ''}`} aria-label="Winner checkout"><p className="eyebrow">Winner checkout</p>{checkoutStatus === 'paid' ? <><strong>Payment received</strong><span>Your purchase is paid.</span></> : <><strong>{checkoutStatus === 'loading' ? 'Checking payment…' : 'Payment required'}</strong><span>Pay the winning bid of {formatCurrency(item.winningBid!.amountCents)} securely through Mock Stripe.</span>{checkoutReturn === 'canceled' && <p className="checkout-notice" role="status">Payment was not completed. You can try again.</p>}{checkoutStatus === 'error' && <p className="checkout-error" role="alert">Could not load payment status.</p>}{checkoutError && <p className="checkout-error" role="alert">{checkoutError}</p>}<button className="checkout-button" type="button" disabled={checkoutPending || checkoutStatus === 'loading'} onClick={() => void beginCheckout()}>{checkoutPending ? 'Opening checkout…' : 'Complete purchase'}</button></>}</section>}{isSeller && <section className={`seller-payment-status ${checkoutStatus === 'paid' ? 'paid' : ''}`} aria-label="Winner payment status"><p className="eyebrow">Winner payment</p><strong>{checkoutStatus === 'paid' ? 'Paid' : checkoutStatus === 'loading' ? 'Checking payment…' : checkoutStatus === 'error' ? 'Payment status unavailable' : 'Awaiting payment'}</strong><span>{checkoutStatus === 'paid' ? 'The winning bidder completed payment.' : 'The winning bidder has not completed payment yet.'}</span></section>}</div><div className="seller-card"><span className="seller-avatar">{item.seller.displayName.charAt(0)}</span><div><small>Sold by</small><strong>{item.seller.displayName}</strong><span>@{item.seller.handle} · {item.location}</span></div></div></section></div><BidHistory item={item} /><div className={`item-details-grid${item.specs.length ? '' : ' details-only'}`}><section><p className="eyebrow">About this item</p><h2>The details</h2><p>{item.description}</p></section>{item.specs.length > 0 && <section className="spec-list"><p className="eyebrow">Specifications</p>{item.specs.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>}</div></main>;
+}
+
+export function App() {
+  const path = window.location.pathname;
+  const params = new URLSearchParams(window.location.search);
+  const query = params.get('q') ?? '';
+  const [users, setUsers] = useState<DemoUser[]>([]);
+  const [activeUserId, setActiveUserId] = useState<number | null>(null);
+  const [userError, setUserError] = useState('');
+  const [outcomeNotifications, setOutcomeNotifications] = useState<OutcomeNotification[]>([]);
+
+  useEffect(() => {
+    void fetchUsers().then((loadedUsers) => {
+      setUsers(loadedUsers);
+      const storedId = Number(sessionStorage.getItem(activeUserStorageKey));
+      const storedUser = loadedUsers.find((user) => user.id === storedId);
+      const selected = storedUser ?? loadedUsers[Math.floor(Math.random() * loadedUsers.length)];
+      if (selected) {
+        setActiveUserId(selected.id);
+        sessionStorage.setItem(activeUserStorageKey, String(selected.id));
+      }
+    }).catch(() => setUserError('Users unavailable'));
+  }, []);
+
+  function switchUser(userId: number) {
+    setActiveUserId(userId);
+    sessionStorage.setItem(activeUserStorageKey, String(userId));
+  }
+
+  useEffect(() => {
+    setOutcomeNotifications([]);
+    if (!activeUserId) return undefined;
+    return watchOutcomeNotifications(activeUserId, (notification) => {
+      if (notification.recipientUserId !== activeUserId) return;
+      if (!rememberOutcomeNotification(notification.notificationId)) return;
+      setOutcomeNotifications((queue) => enqueueOutcomeNotification(queue, notification));
+    });
+  }, [activeUserId]);
+
+  function dismissOutcomeNotification() {
+    setOutcomeNotifications((queue) => queue.slice(1));
+  }
+
+  async function checkoutFromNotification(notification: OutcomeNotification) {
+    const checkout = await createCheckout(notification.slug, notification.recipientUserId);
+    window.location.assign(checkout.checkoutUrl);
+  }
+
+  const activeUser = users.find((user) => user.id === activeUserId) ?? null;
+  useEffect(() => { document.title = 'Auction House'; }, [path]);
+  let page = <HomePage />;
+  if (path === '/search') page = <SearchPage query={query} />;
+  if (path === '/auctions/new') page = <NewAuctionPage activeUser={activeUser} />;
+  if (path.startsWith('/items/')) page = <ItemPage slug={decodeURIComponent(path.slice('/items/'.length))} activeUser={activeUser} />;
+  return <div className="app-shell"><SiteHeader initialQuery={query} activeUser={activeUser} />{page}<footer><div className="container"><span>Auction House</span><span className="footer-note">Database-backed demo marketplace</span><UserSwitcher users={users} activeUserId={activeUserId} error={userError} onChange={switchUser} /></div></footer>{outcomeNotifications[0] && <OutcomeModal notification={outcomeNotifications[0]} queuedCount={outcomeNotifications.length - 1} onDismiss={dismissOutcomeNotification} onCheckout={outcomeNotifications[0].recipientRole === 'winner' ? () => checkoutFromNotification(outcomeNotifications[0]) : undefined} />}</div>;
+}

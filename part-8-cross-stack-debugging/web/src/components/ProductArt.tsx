@@ -1,0 +1,22 @@
+import { type ProductArtKind } from '../catalog';
+
+export function ProductArt({ kind, label }: { kind: ProductArtKind; label: string }) {
+  return (
+    <svg className="product-art" viewBox="0 0 640 440" role="img" aria-label={label}>
+      <defs>
+        <linearGradient id={`${kind}-surface`} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="var(--art-start)" /><stop offset="1" stopColor="var(--art-end)" /></linearGradient>
+        <filter id={`${kind}-shadow`} x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="18" stdDeviation="16" floodOpacity=".18" /></filter>
+      </defs>
+      <rect width="640" height="440" rx="28" fill={`url(#${kind}-surface)`} />
+      <circle cx="520" cy="70" r="120" fill="var(--art-glow)" opacity=".5" /><circle cx="100" cy="405" r="150" fill="var(--art-glow)" opacity=".3" />
+      <g filter={`url(#${kind}-shadow)`}>
+        {kind === 'gpu' && <><rect x="108" y="116" width="424" height="210" rx="22" fill="#20242d" /><rect x="129" y="137" width="382" height="168" rx="14" fill="#303641" stroke="#59616f" strokeWidth="3" /><circle cx="252" cy="221" r="66" fill="#161a20" stroke="#747e8d" strokeWidth="7" /><circle cx="388" cy="221" r="66" fill="#161a20" stroke="#747e8d" strokeWidth="7" />{[252, 388].map((x) => <g key={x} stroke="#8b96a5" strokeWidth="6">{[0,45,90,135].map((r) => <line key={r} x1={x} y1="163" x2={x} y2="279" transform={`rotate(${r} ${x} 221)`} />)}</g>)}<rect x="168" y="326" width="300" height="12" rx="3" fill="#d6a83b" /><rect x="455" y="168" width="56" height="30" rx="4" fill="#8ce65c" /></>}
+        {kind === 'cpu' && <><rect x="185" y="85" width="270" height="270" rx="30" fill="#d5b15d" transform="rotate(8 320 220)" /><rect x="210" y="110" width="220" height="220" rx="23" fill="#2c3441" stroke="#f2d690" strokeWidth="7" transform="rotate(8 320 220)" /><rect x="248" y="150" width="144" height="142" rx="14" fill="#566173" transform="rotate(8 320 220)" /><path d="M275 195h90M275 220h90M275 245h60" stroke="#cfd7e3" strokeWidth="7" strokeLinecap="round" transform="rotate(8 320 220)" /></>}
+        {kind === 'memory' && <>{[0, 1, 2].map((row) => <g key={row} transform={`translate(${125 + row * 28} ${112 + row * 75}) rotate(${-5 + row * 3} 190 32)`}><rect width="390" height="64" rx="9" fill={row === 1 ? '#283db3' : '#263247'} />{[0,1,2,3,4,5,6,7].map((chip) => <rect key={chip} x={18 + chip * 46} y="13" width="34" height="34" rx="4" fill="#101622" />)}<path d="M18 64v12M40 64v12M62 64v12M84 64v12M106 64v12M128 64v12M150 64v12M172 64v12M194 64v12M216 64v12M238 64v12M260 64v12M282 64v12M304 64v12M326 64v12M348 64v12M370 64v12" stroke="#d8b75f" strokeWidth="6" /></g>)}</>}
+        {kind === 'chassis' && <><path d="M105 151l55-54h382l-42 54z" fill="#555e6d" /><rect x="105" y="151" width="395" height="188" rx="12" fill="#202631" />{[0,1,2,3].map((row) => [0,1,2,3,4,5].map((col) => <rect key={`${row}-${col}`} x={127 + col * 59} y={171 + row * 39} width="47" height="29" rx="4" fill="#384251" stroke="#667384" strokeWidth="2" />))}<rect x="105" y="339" width="395" height="13" rx="5" fill="#11151b" /><circle cx="471" cy="316" r="5" fill="#7ef39a" /></>}
+        {kind === 'switch' && <><path d="M94 169l54-55h411l-44 55z" fill="#66717e" /><rect x="94" y="169" width="421" height="126" rx="10" fill="#232a34" />{[0,1].map((row) => [0,1,2,3,4,5,6,7].map((col) => <g key={`${row}-${col}`}><rect x={121 + col * 44} y={188 + row * 43} width="32" height="28" rx="3" fill="#0f141b" stroke="#818d9d" strokeWidth="2" /><circle cx={127 + col * 44} cy={221 + row * 43} r="2.5" fill="#6ff6ab" /></g>))}<rect x="479" y="191" width="18" height="73" rx="4" fill="#3e4957" /></>}
+        {kind === 'cooling' && <><path d="M210 133C84 123 102 321 226 301M429 135c126-10 108 188-16 168" fill="none" stroke="#25303b" strokeWidth="26" strokeLinecap="round" /><path d="M210 133C84 123 102 321 226 301M429 135c126-10 108 188-16 168" fill="none" stroke="#5ad1e6" strokeWidth="11" strokeLinecap="round" />{[['205','91'],['354','93']].map(([x,y]) => <g key={x} transform={`translate(${x} ${y})`}><rect width="88" height="88" rx="18" fill="#303a46" stroke="#92a0ae" strokeWidth="5" /><circle cx="44" cy="44" r="26" fill="#151b22" stroke="#58d9ec" strokeWidth="5" /><circle cx="44" cy="44" r="8" fill="#a5f4ff" /></g>)}<rect x="220" y="267" width="198" height="82" rx="18" fill="#222b35" />{[0,1,2,3,4,5,6].map((line) => <path key={line} d={`M${239 + line * 26} 278v60`} stroke="#566573" strokeWidth="5" />)}</>}
+      </g>
+    </svg>
+  );
+}

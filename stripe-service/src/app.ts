@@ -2,6 +2,7 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 
 import Fastify from 'fastify';
 import { z } from 'zod';
+import { activeTraceparent, contextFromTraceparent, withStripeSpan } from './tracing.js';
 
 const createSessionSchema = z.object({
   mode: z.literal('payment'),
@@ -34,6 +35,7 @@ type CheckoutSession = {
   cancel_url: string;
   title: string;
   amount_cents: number;
+  traceparent: string | null;
   completion: null | {
     body: string;
     signature: string;
@@ -101,6 +103,13 @@ export function buildStripeApp(options: {
   app.post('/v1/checkout/sessions', async (request, reply) => {
     const parsed = createSessionSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { type: 'invalid_request_error', message: parsed.error.issues[0]?.message ?? 'Invalid Checkout Session.' } });
+    const incomingTraceparent = typeof request.headers.traceparent === 'string'
+      ? request.headers.traceparent
+      : undefined;
+    return withStripeSpan('mock-stripe.checkout.create', {
+      'purchase.id': parsed.data.client_reference_id,
+      'purchase.amount_cents': parsed.data.line_items[0]!.price_data.unit_amount,
+    }, contextFromTraceparent(incomingTraceparent), async (span) => {
     const lineItem = parsed.data.line_items[0]!;
     const existing = [...sessions.values()].find((session) => session.client_reference_id === parsed.data.client_reference_id);
     if (existing) {
@@ -108,6 +117,10 @@ export function buildStripeApp(options: {
         && existing.amount_cents === lineItem.price_data.unit_amount
         && existing.success_url === parsed.data.success_url
         && existing.cancel_url === parsed.data.cancel_url;
+      span.setAttributes({
+        'payment.session.id': existing.id,
+        'mock_stripe.checkout.outcome': matches ? 'existing_session' : 'idempotency_conflict',
+      });
       if (!matches) return reply.code(409).send({ error: { type: 'idempotency_error', message: 'Checkout Session parameters conflict with the existing Purchase.' } });
       return publicSession(existing);
     }
@@ -123,10 +136,16 @@ export function buildStripeApp(options: {
       cancel_url: parsed.data.cancel_url,
       title: lineItem.price_data.product_data.name,
       amount_cents: lineItem.price_data.unit_amount,
+      traceparent: activeTraceparent(),
       completion: null,
     };
     sessions.set(id, session);
+    span.setAttributes({
+      'payment.session.id': id,
+      'mock_stripe.checkout.outcome': 'session_created',
+    });
     return reply.code(201).send(publicSession(session));
+    });
   });
 
   app.get('/v1/checkout/sessions/:id', async (request, reply) => {
@@ -149,11 +168,21 @@ export function buildStripeApp(options: {
     const session = id.success ? sessions.get(id.data.id) : undefined;
     if (!session) return reply.code(404).send({ error: 'Checkout Session not found.' });
     if (!parsed.success) return reply.code(400).send({ error: 'Enter valid test card details.' });
+    return withStripeSpan('mock-stripe.payment.attempt', {
+      'payment.session.id': session.id,
+      'purchase.id': session.client_reference_id,
+      'purchase.amount_cents': session.amount_cents,
+    }, contextFromTraceparent(session.traceparent ?? undefined), async (span) => {
     if (session.status === 'complete') {
-      if (!await deliverCompletion(session)) return reply.code(502).send({ error: 'Payment was received, but confirmation is still pending. Try again.' });
+      const delivered = await deliverCompletion(session);
+      span.setAttribute('mock_stripe.payment.outcome', delivered ? 'already_paid' : 'webhook_pending');
+      if (!delivered) return reply.code(502).send({ error: 'Payment was received, but confirmation is still pending. Try again.' });
       return { redirect_url: session.success_url.replace('{CHECKOUT_SESSION_ID}', session.id) };
     }
-    if (parsed.data.cardNumber === '4000000000000002') return reply.code(402).send({ error: 'Your card was declined. Use a different card and try again.' });
+    if (parsed.data.cardNumber === '4000000000000002') {
+      span.setAttribute('mock_stripe.payment.outcome', 'declined');
+      return reply.code(402).send({ error: 'Your card was declined. Use a different card and try again.' });
+    }
     if (parsed.data.cardNumber === '4242424242424242') {
       const event = {
         eventId: randomUUID(),
@@ -166,10 +195,14 @@ export function buildStripeApp(options: {
       session.status = 'complete';
       session.payment_status = 'paid';
       session.completion = { body, signature, delivered: false };
-      if (!await deliverCompletion(session)) return reply.code(502).send({ error: 'Payment was received, but confirmation is still pending. Try again.' });
+      const delivered = await deliverCompletion(session);
+      span.setAttribute('mock_stripe.payment.outcome', delivered ? 'paid' : 'webhook_pending');
+      if (!delivered) return reply.code(502).send({ error: 'Payment was received, but confirmation is still pending. Try again.' });
       return { redirect_url: session.success_url.replace('{CHECKOUT_SESSION_ID}', session.id) };
     }
+    span.setAttribute('mock_stripe.payment.outcome', 'unsupported');
     return reply.code(409).send({ error: 'This payment method is not available.' });
+    });
   });
 
   return app;
