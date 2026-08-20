@@ -11,6 +11,7 @@ import {
 } from './catalog';
 import { ProductArt } from './components/ProductArt';
 import { ProductCard } from './components/ProductCard';
+import { NewAuctionPage } from './components/NewAuctionPage';
 import { SiteHeader } from './components/SiteHeader';
 import { activeUserStorageKey, UserSwitcher } from './components/UserSwitcher';
 
@@ -85,6 +86,7 @@ export function App() {
   useEffect(() => { document.title = 'Auction House'; }, [path]);
   let page = <HomePage />;
   if (path === '/search') page = <SearchPage query={query} />;
+  if (path === '/auctions/new') page = <NewAuctionPage activeUser={activeUser} />;
   if (path.startsWith('/items/')) page = <ItemPage slug={decodeURIComponent(path.slice('/items/'.length))} />;
   return <div className="app-shell"><SiteHeader initialQuery={query} activeUser={activeUser} />{page}<footer><div className="container"><span>Auction House</span><span className="footer-note">Database-backed demo marketplace</span><UserSwitcher users={users} activeUserId={activeUserId} error={userError} onChange={switchUser} /></div></footer></div>;
 }

@@ -36,10 +36,18 @@ describe('marketplace read API', () => {
     expect(response.json()[0]).toEqual({ id: 1, displayName: 'Avery Chen', handle: 'avery' });
   });
 
-  it('lists and searches the six database-backed auctions', async () => {
+  it('lists all seeded auctions and searches the database-backed catalog', async () => {
     const allResponse = await app.inject({ method: 'GET', url: '/api/auctions' });
     expect(allResponse.statusCode).toBe(200);
-    expect(allResponse.json()).toHaveLength(6);
+    const slugs = allResponse.json().map((auction: { slug: string }) => auction.slug);
+    expect(slugs).toEqual(expect.arrayContaining([
+      'nvidia-h100-sxm-80gb',
+      'amd-epyc-9654',
+      'one-point-five-tb-ddr5-ecc',
+      'supermicro-4u-gpu-chassis',
+      'quantum-2-400g-switch',
+      'direct-to-chip-cooling-loop',
+    ]));
 
     const searchResponse = await app.inject({ method: 'GET', url: '/api/auctions?q=memory' });
     expect(searchResponse.statusCode).toBe(200);
