@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Vite
+.vite/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Logs (but keep the Codex session transcripts — they're deliverables)
+*.log
+npm-debug.log*
+!codex-logs/**
+!**/codex-logs/*.log
+
+# Test output
+coverage/
+
+# Playwright generated output
+**/playwright-report/
+**/test-results/
+**/blob-report/
+**/artifacts/playwright/
+**/artifacts/playwright-report/
+.playwright/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local archives
+*.zip
