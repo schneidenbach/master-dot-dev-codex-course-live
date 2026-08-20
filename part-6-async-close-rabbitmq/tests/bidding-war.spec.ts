@@ -6,7 +6,9 @@ import {
   type BrowserContext,
   type Page,
 } from '@playwright/test';
-import pg from 'pg';
+import { asc, count, eq, gt, sql } from 'drizzle-orm';
+import { createDatabase } from '../server/src/db/index.js';
+import { auctions, bids } from '../server/src/db/schema.js';
 
 const baseURL = 'http://localhost:5106';
 const databaseURL = process.env.DATABASE_URL
@@ -211,7 +213,7 @@ async function tileWindows(
 
 test('Bidding War: four visible users are protected from simultaneous-bid races', async () => {
   test.setTimeout(holdOpenMs > 0 ? holdOpenMs + 120_000 : 90_000);
-  const database = new pg.Pool({ connectionString: databaseURL });
+  const { db, pool } = createDatabase(databaseURL);
   const browser = await chromium.launch({
     channel: 'msedge',
     headless: false,
@@ -253,12 +255,11 @@ test('Bidding War: four visible users are protected from simultaneous-bid races'
 
     const slug = decodeURIComponent(new URL(sellerPage.url()).pathname.split('/').pop() ?? '');
     const deadlineMs = Date.now() + 20_000;
-    await database.query(
-      'UPDATE auctions SET ends_at = $1 WHERE slug = $2',
-      [new Date(deadlineMs), slug],
-    );
+    await db.update(auctions)
+      .set({ endsAt: new Date(deadlineMs) })
+      .where(eq(auctions.slug, slug));
 
-    await database.query(`
+    await db.execute(sql`
       CREATE OR REPLACE FUNCTION bidding_war_delay_insert() RETURNS trigger AS $$
       BEGIN
         IF EXISTS (
@@ -350,33 +351,33 @@ test('Bidding War: four visible users are protected from simultaneous-bid races'
 
     await expectLivePrice(visibleWindows, '$107', 'PROTECTED: live history is strictly increasing');
 
-    const duplicateResult = await database.query<{ amount_cents: number; accepted: number }>(
-      `SELECT b.amount_cents, count(*)::int AS accepted
-       FROM bids b JOIN auctions a ON a.id = b.auction_id
-       WHERE a.slug = $1
-       GROUP BY b.amount_cents
-       HAVING count(*) > 1
-       ORDER BY b.amount_cents`,
-      [slug],
-    );
-    expect(duplicateResult.rows).toEqual([]);
+    const acceptedCount = count(bids.id);
+    const duplicateResult = await db.select({
+      amountCents: bids.amountCents,
+      accepted: acceptedCount,
+    })
+      .from(bids)
+      .innerJoin(auctions, eq(auctions.id, bids.auctionId))
+      .where(eq(auctions.slug, slug))
+      .groupBy(bids.amountCents)
+      .having(gt(acceptedCount, 1))
+      .orderBy(asc(bids.amountCents));
+    expect(duplicateResult).toEqual([]);
 
-    const historyResult = await database.query<{ amount_cents: number }>(
-      `SELECT b.amount_cents
-       FROM bids b JOIN auctions a ON a.id = b.auction_id
-       WHERE a.slug = $1
-       ORDER BY b.created_at ASC, b.id ASC`,
-      [slug],
-    );
-    const acceptedAmounts = historyResult.rows.map((row) => row.amount_cents);
+    const historyResult = await db.select({ amountCents: bids.amountCents })
+      .from(bids)
+      .innerJoin(auctions, eq(auctions.id, bids.auctionId))
+      .where(eq(auctions.slug, slug))
+      .orderBy(asc(bids.createdAt), asc(bids.id));
+    const acceptedAmounts = historyResult.map((row) => row.amountCents);
     expect(acceptedAmounts.at(-1)).toBe(10_700);
     expect(new Set(acceptedAmounts).size).toBe(acceptedAmounts.length);
     for (let index = 1; index < acceptedAmounts.length; index += 1) {
       expect(acceptedAmounts[index]).toBeGreaterThanOrEqual(acceptedAmounts[index - 1] + 100);
     }
 
-    await database.query('DROP TRIGGER IF EXISTS bidding_war_delay_insert ON bids');
-    await database.query('DROP FUNCTION IF EXISTS bidding_war_delay_insert()');
+    await db.execute(sql`DROP TRIGGER IF EXISTS bidding_war_delay_insert ON bids`);
+    await db.execute(sql`DROP FUNCTION IF EXISTS bidding_war_delay_insert()`);
     triggerInstalled = false;
 
     await tileWindows(launched);
@@ -392,10 +393,10 @@ test('Bidding War: four visible users are protected from simultaneous-bid races'
     }
   } finally {
     if (triggerInstalled) {
-      await database.query('DROP TRIGGER IF EXISTS bidding_war_delay_insert ON bids');
-      await database.query('DROP FUNCTION IF EXISTS bidding_war_delay_insert()');
+      await db.execute(sql`DROP TRIGGER IF EXISTS bidding_war_delay_insert ON bids`);
+      await db.execute(sql`DROP FUNCTION IF EXISTS bidding_war_delay_insert()`);
     }
-    await database.end();
+    await pool.end();
     await Promise.all(launched.map(({ context }) => context.close()));
     await browser.close();
   }

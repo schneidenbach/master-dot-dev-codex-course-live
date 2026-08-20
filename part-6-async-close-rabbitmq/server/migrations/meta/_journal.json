@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1704067200000,
+      "tag": "001_marketplace",
+      "breakpoints": false
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1704067201000,
+      "tag": "002_auction_closes_outbox",
+      "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1704067202000,
+      "tag": "003_notification_deliveries",
+      "breakpoints": false
+    }
+  ]
+}

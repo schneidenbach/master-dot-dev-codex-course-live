@@ -1,5 +1,7 @@
 import { expect, test, type BrowserContext, type Page, type WebSocket } from '@playwright/test';
-import pg from 'pg';
+import { eq } from 'drizzle-orm';
+import { createDatabase } from '../server/src/db/index.js';
+import { auctions } from '../server/src/db/schema.js';
 
 const baseURL = 'http://localhost:5106';
 const databaseURL = process.env.DATABASE_URL
@@ -37,7 +39,7 @@ async function openSubscribedAuction(page: Page, url: string) {
 }
 
 test('an accepted bid refreshes every open watcher without a page reload', async ({ browser, request }) => {
-  const database = new pg.Pool({ connectionString: databaseURL });
+  const { db, pool } = createDatabase(databaseURL);
   const createResponse = await request.post('/api/auctions', {
     data: {
       userId: 10,
@@ -78,7 +80,7 @@ test('an accepted bid refreshes every open watcher without a page reload', async
     await expect(watcher.locator('.bid-history-list article').first()).toContainText('$501');
   } finally {
     await Promise.all([bidderContext.close(), watcherContext.close()]);
-    await database.query('DELETE FROM auctions WHERE slug = $1', [slug]);
-    await database.end();
+    await db.delete(auctions).where(eq(auctions.slug, slug));
+    await pool.end();
   }
 });

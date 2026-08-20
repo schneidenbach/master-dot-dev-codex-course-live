@@ -7,7 +7,9 @@ import {
   type Page,
   type WebSocket,
 } from '@playwright/test';
-import pg from 'pg';
+import { eq } from 'drizzle-orm';
+import { createDatabase } from '../server/src/db/index.js';
+import { auctions, notificationDeliveries, outboxEvents } from '../server/src/db/schema.js';
 
 const databaseURL = process.env.DATABASE_URL
   ?? 'postgres://auction:auction@127.0.0.1:55432/auction_part_6';
@@ -43,7 +45,7 @@ async function openUserSession(
 }
 
 test('RabbitMQ close event opens one role-specific modal in every online recipient session', async ({ browser, request }) => {
-  const database = new pg.Pool({ connectionString: databaseURL });
+  const { db, pool } = createDatabase(databaseURL);
   const sessions: Array<{ context: BrowserContext; page: Page }> = [];
   let slug = '';
 
@@ -75,10 +77,9 @@ test('RabbitMQ close event opens one role-specific modal in every online recipie
     ]);
     sessions.push(seller, winnerOne, winnerTwo, unrelated);
 
-    await database.query(
-      'UPDATE auctions SET ends_at = $1 WHERE slug = $2',
-      [new Date(Date.now() + 1_500), slug],
-    );
+    await db.update(auctions)
+      .set({ endsAt: new Date(Date.now() + 1_500) })
+      .where(eq(auctions.slug, slug));
 
     const sellerModal = seller.page.getByRole('dialog');
     await expect(sellerModal).toContainText('Your auction has closed', { timeout: 8_000 });
@@ -94,26 +95,26 @@ test('RabbitMQ close event opens one role-specific modal in every online recipie
     }
     await expect(unrelated.page.getByRole('dialog')).toHaveCount(0);
 
-    const deliveryState = await database.query<{
-      payload: unknown;
-      published_at: Date | null;
-      delivery_count: number;
-      emitted_count: number;
-    }>(
-      `SELECT event.payload, event.published_at,
-         count(delivery.id)::int AS delivery_count,
-         count(delivery.emitted_at)::int AS emitted_count
-       FROM outbox_events event
-       JOIN auctions a ON a.id = event.auction_id
-       LEFT JOIN notification_deliveries delivery ON delivery.outbox_event_id = event.id
-       WHERE a.slug = $1
-       GROUP BY event.id`,
-      [slug],
-    );
-    expect(deliveryState.rows[0]).toMatchObject({
-      published_at: expect.any(Date),
-      delivery_count: 2,
-      emitted_count: 2,
+    const deliveryRows = await db.select({
+      payload: outboxEvents.payload,
+      publishedAt: outboxEvents.publishedAt,
+      deliveryId: notificationDeliveries.id,
+      emittedAt: notificationDeliveries.emittedAt,
+    })
+      .from(outboxEvents)
+      .innerJoin(auctions, eq(auctions.id, outboxEvents.auctionId))
+      .leftJoin(notificationDeliveries, eq(notificationDeliveries.outboxEventId, outboxEvents.id))
+      .where(eq(auctions.slug, slug));
+    const deliveryState = {
+      payload: deliveryRows[0].payload,
+      publishedAt: deliveryRows[0].publishedAt,
+      deliveryCount: deliveryRows.filter((row) => row.deliveryId !== null).length,
+      emittedCount: deliveryRows.filter((row) => row.emittedAt !== null).length,
+    };
+    expect(deliveryState).toMatchObject({
+      publishedAt: expect.any(Date),
+      deliveryCount: 2,
+      emittedCount: 2,
     });
 
     await winnerOne.page.getByRole('button', { name: 'Dismiss' }).click();
@@ -129,7 +130,7 @@ test('RabbitMQ close event opens one role-specific modal in every online recipie
       channel.publish(
         'auction.events',
         'auction.closed',
-        Buffer.from(JSON.stringify(deliveryState.rows[0].payload)),
+        Buffer.from(JSON.stringify(deliveryState.payload)),
         { persistent: true, contentType: 'application/json' },
       );
       await channel.waitForConfirms();
@@ -143,7 +144,7 @@ test('RabbitMQ close event opens one role-specific modal in every online recipie
     await expect(winnerTwo.page.getByRole('dialog')).toHaveCount(0);
   } finally {
     await Promise.all(sessions.map(({ context }) => context.close()));
-    if (slug) await database.query('DELETE FROM auctions WHERE slug = $1', [slug]);
-    await database.end();
+    if (slug) await db.delete(auctions).where(eq(auctions.slug, slug));
+    await pool.end();
   }
 });

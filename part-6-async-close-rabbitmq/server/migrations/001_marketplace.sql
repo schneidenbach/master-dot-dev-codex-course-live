@@ -1,10 +1,10 @@
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   display_name text NOT NULL UNIQUE CHECK (length(trim(display_name)) BETWEEN 2 AND 40),
   handle text NOT NULL UNIQUE CHECK (handle ~ '^[a-z0-9_]+$')
 );
 
-CREATE TABLE auctions (
+CREATE TABLE IF NOT EXISTS auctions (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   slug text NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'),
   seller_user_id integer NOT NULL REFERENCES users(id),
@@ -21,7 +21,7 @@ CREATE TABLE auctions (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE bids (
+CREATE TABLE IF NOT EXISTS bids (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   auction_id bigint NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
   bidder_user_id integer NOT NULL REFERENCES users(id),
@@ -29,14 +29,15 @@ CREATE TABLE bids (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX bids_auction_created_idx ON bids (auction_id, created_at DESC, id DESC);
-CREATE INDEX auctions_ends_at_idx ON auctions (ends_at);
+CREATE INDEX IF NOT EXISTS bids_auction_created_idx ON bids (auction_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS auctions_ends_at_idx ON auctions (ends_at);
 
 INSERT INTO users (display_name, handle) VALUES
   ('Avery Chen', 'avery'), ('Maya Thompson', 'maya'), ('Theo Brooks', 'theo'),
   ('Priya Shah', 'priya'), ('Jordan Lee', 'jordan'), ('Sam Rivera', 'sam'),
   ('Nora Williams', 'nora'), ('Eli Martin', 'eli'), ('Zoe Patel', 'zoe'),
-  ('Marcus Green', 'marcus');
+  ('Marcus Green', 'marcus')
+ON CONFLICT DO NOTHING;
 
 INSERT INTO auctions (
   slug, seller_user_id, title, kicker, category, art, starting_price_cents, ends_at,
