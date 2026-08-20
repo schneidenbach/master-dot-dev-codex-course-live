@@ -60,7 +60,7 @@ describe('mock Stripe Checkout', () => {
     expect(retrieved.json()).toMatchObject({ status: 'open', payment_status: 'unpaid' });
   });
 
-  it('authenticates a successful completion before marking the Session paid and redirecting', async () => {
+  it('marks a successful completion paid, authenticates its webhook, and redirects', async () => {
     const deliveries: Array<{ body: string; signature: string }> = [];
     const successApp = buildStripeApp({
       baseUrl: 'http://stripe.test',
@@ -93,5 +93,57 @@ describe('mock Stripe Checkout', () => {
     const retrieved = await successApp.inject({ method: 'GET', url: `/v1/checkout/sessions/${session.id}` });
     expect(retrieved.json()).toMatchObject({ status: 'complete', payment_status: 'paid' });
     await successApp.close();
+  });
+
+  it('does not charge a completed Session twice and redelivers the same event after failure', async () => {
+    const deliveries: string[] = [];
+    let deliveryAttempt = 0;
+    const retryApp = buildStripeApp({
+      baseUrl: 'http://stripe.test',
+      logger: false,
+      deliverWebhook: async (body) => {
+        deliveries.push(body);
+        deliveryAttempt++;
+        return deliveryAttempt > 1;
+      },
+    });
+    const purchaseId = crypto.randomUUID();
+    const payload = {
+      mode: 'payment',
+      client_reference_id: purchaseId,
+      line_items: [{ price_data: { currency: 'usd', product_data: { name: 'Retry server' }, unit_amount: 30_000 }, quantity: 1 }],
+      success_url: 'http://marketplace.test/items/server?checkout=success&session_id={CHECKOUT_SESSION_ID}',
+      cancel_url: 'http://marketplace.test/items/server?checkout=canceled',
+    };
+    const created = await retryApp.inject({ method: 'POST', url: '/v1/checkout/sessions', payload });
+    const attemptPayload = { cardNumber: '4242 4242 4242 4242', expiry: '12 / 30', cvc: '123' };
+    const firstAttempt = await retryApp.inject({
+      method: 'POST', url: `/v1/checkout/sessions/${created.json().id}/attempt`, payload: attemptPayload,
+    });
+    expect(firstAttempt.statusCode).toBe(502);
+    const paid = await retryApp.inject({ method: 'GET', url: `/v1/checkout/sessions/${created.json().id}` });
+    expect(paid.json()).toMatchObject({ status: 'complete', payment_status: 'paid' });
+
+    const retry = await retryApp.inject({
+      method: 'POST', url: `/v1/checkout/sessions/${created.json().id}/attempt`, payload: attemptPayload,
+    });
+    expect(retry.statusCode).toBe(200);
+    const repeated = await retryApp.inject({
+      method: 'POST', url: `/v1/checkout/sessions/${created.json().id}/attempt`, payload: attemptPayload,
+    });
+    expect(repeated.statusCode).toBe(200);
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries[0]).toBe(deliveries[1]);
+
+    const samePurchase = await retryApp.inject({ method: 'POST', url: '/v1/checkout/sessions', payload });
+    expect(samePurchase.statusCode).toBe(200);
+    expect(samePurchase.json()).toMatchObject({ id: created.json().id, status: 'complete', payment_status: 'paid' });
+    const conflicting = await retryApp.inject({
+      method: 'POST',
+      url: '/v1/checkout/sessions',
+      payload: { ...payload, line_items: [{ ...payload.line_items[0], price_data: { ...payload.line_items[0].price_data, unit_amount: 30_001 } }] },
+    });
+    expect(conflicting.statusCode).toBe(409);
+    await retryApp.close();
   });
 });
