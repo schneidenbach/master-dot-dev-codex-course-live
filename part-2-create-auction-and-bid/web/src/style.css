@@ -115,8 +115,27 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .current-price strong { display: inline-block; margin: 3px 9px 0 0; font-family: "Manrope", sans-serif; font-size: 36px; letter-spacing: -.045em; }
 .current-price small { display: inline; }.bidder strong, .ending strong { display: block; margin-top: 3px; font-size: 14px; }
 .bid-form { grid-column: 1 / -1; margin-top: 5px; }.bid-form label { display: block; margin-bottom: 7px; font-size: 12px; font-weight: 700; }.bid-form > div { display: grid; height: 46px; grid-template-columns: 30px 1fr auto; align-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }.bid-form > div > span { padding-left: 12px; color: var(--ink); font-size: 14px; }.bid-form input { min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; }.bid-form button { align-self: stretch; padding-inline: 19px; border: 0; background: var(--accent); color: white; cursor: pointer; font-weight: 700; }
+.bid-form input:disabled { color: var(--muted); cursor: not-allowed; }
+.bid-form button:disabled { cursor: not-allowed; opacity: .55; }
+.bid-form .bid-guidance { margin-top: 7px; }
+.bid-form .bid-message { margin: 8px 0 0; font-size: 11px; font-weight: 700; }
+.bid-form .bid-message.error { color: #b42318; }
+.bid-form .bid-message.success { color: #067647; }
 .seller-card { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 13px; }.seller-avatar { display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 800; }.seller-card div { display: grid; gap: 2px; }.seller-card small, .seller-card span:last-child { color: var(--muted); font-size: 11px; }.seller-card strong { font-size: 13px; }
 .item-details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 50px; margin-top: 54px; padding-top: 38px; border-top: 1px solid var(--line); }.item-details-grid section:first-child > p:last-child { max-width: 580px; color: var(--ink-soft); line-height: 1.7; }.spec-list > div { display: flex; justify-content: space-between; gap: 20px; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 13px; }.spec-list > div span { color: var(--muted); }.spec-list > div strong { text-align: right; }
+.bid-history-section { margin-top: 48px; padding: 27px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface-soft); }
+.bid-history-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 18px; }
+.bid-history-heading h2 { margin: 0; font-family: "Manrope", sans-serif; font-size: 23px; letter-spacing: -.035em; }
+.bid-history-heading > span { color: var(--muted); font-size: 11px; }
+.bid-history-list { display: grid; }
+.bid-history-list article { display: grid; grid-template-columns: 36px 1fr auto; align-items: center; gap: 12px; padding: 13px 0; border-top: 1px solid var(--line); }
+.bid-history-avatar { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 50%; background: var(--surface); color: var(--accent); font-size: 12px; font-weight: 800; }
+.bid-history-list article > div { display: grid; gap: 2px; }
+.bid-history-list article > div:last-child { justify-items: end; }
+.bid-history-list strong { font-size: 12px; }
+.bid-history-list span, .bid-history-list time { color: var(--muted); font-size: 10px; }
+.bid-history-empty { display: grid; gap: 4px; padding: 22px; border: 1px dashed var(--line); border-radius: 11px; background: var(--surface); text-align: center; }
+.bid-history-empty strong { font-size: 13px; }.bid-history-empty span { color: var(--muted); font-size: 11px; }
 
 .new-auction-page { max-width: 920px; padding-block: 34px 78px; }
 .new-auction-heading { max-width: 700px; margin-bottom: 34px; }
@@ -179,4 +198,7 @@ footer .container > span:first-child { color: var(--ink); font-family: "Manrope"
   .brand > span:last-child, .sign-in .avatar { display: none; }
   .header-main { gap: 10px; }
   .header-actions .sign-in > span:last-child { max-width: 112px; }
+  .bid-history-section { margin-top: 34px; padding: 18px; }
+  .bid-history-list article { grid-template-columns: 32px 1fr; }
+  .bid-history-list article > div:last-child { grid-column: 2; justify-items: start; }
 }

@@ -21,6 +21,10 @@ const createAuctionSchema = z.object({
   message: 'Closing time must be in the future',
   path: ['endsAt'],
 });
+const createBidSchema = z.object({
+  userId: z.number().int().positive(),
+  amountCents: z.number().int().positive().max(1_000_000_000),
+});
 
 const artByCategory = {
   GPUs: 'gpu',
@@ -54,6 +58,28 @@ type AuctionRow = {
   description: string;
   specs: Array<[string, string]>;
 };
+
+type BidRow = {
+  id: string;
+  amount_cents: number;
+  created_at: Date;
+  bidder_id: number;
+  bidder_display_name: string;
+  bidder_handle: string;
+};
+
+function toBid(row: BidRow) {
+  return {
+    id: row.id,
+    amountCents: row.amount_cents,
+    createdAt: row.created_at.toISOString(),
+    bidder: {
+      id: row.bidder_id,
+      displayName: row.bidder_display_name,
+      handle: row.bidder_handle,
+    },
+  };
+}
 
 const auctionSelect = `
   SELECT a.slug, a.title, a.kicker, a.category, a.art,
@@ -158,7 +184,18 @@ export function buildApp() {
     if (!result.rows[0]) {
       return reply.code(404).send({ error: 'Auction not found' });
     }
-    return toAuction(result.rows[0]);
+    const bids = await pool.query<BidRow>(
+      `SELECT b.id::text, b.amount_cents, b.created_at,
+         bidder.id AS bidder_id, bidder.display_name AS bidder_display_name,
+         bidder.handle AS bidder_handle
+       FROM bids b
+       JOIN users bidder ON bidder.id = b.bidder_user_id
+       JOIN auctions a ON a.id = b.auction_id
+       WHERE a.slug = $1
+       ORDER BY b.created_at DESC, b.id DESC`,
+      [parsed.data.slug],
+    );
+    return { ...toAuction(result.rows[0]), bidHistory: bids.rows.map(toBid) };
   });
 
   app.post('/api/auctions', async (request, reply) => {
@@ -200,6 +237,65 @@ export function buildApp() {
       return reply.code(400).send({ error: 'Unknown active user' });
     }
     return reply.code(201).send({ slug: result.rows[0].slug });
+  });
+
+  app.post('/api/auctions/:slug/bids', async (request, reply) => {
+    const params = slugParamsSchema.safeParse(request.params);
+    const body = createBidSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({ error: 'Invalid bid' });
+    }
+
+    const auctionResult = await pool.query<{
+      id: string;
+      seller_user_id: number;
+      ends_at: Date;
+      current_price_cents: number;
+    }>(
+      `SELECT a.id::text, a.seller_user_id, a.ends_at,
+         COALESCE(max(b.amount_cents), a.starting_price_cents)::int AS current_price_cents
+       FROM auctions a
+       LEFT JOIN bids b ON b.auction_id = a.id
+       WHERE a.slug = $1
+       GROUP BY a.id`,
+      [params.data.slug],
+    );
+    const auction = auctionResult.rows[0];
+    if (!auction) return reply.code(404).send({ error: 'Auction not found' });
+
+    const bidderResult = await pool.query<{ id: number; display_name: string; handle: string }>(
+      'SELECT id, display_name, handle FROM users WHERE id = $1',
+      [body.data.userId],
+    );
+    const bidder = bidderResult.rows[0];
+    if (!bidder) return reply.code(400).send({ error: 'Unknown active user' });
+    if (auction.seller_user_id === bidder.id) {
+      return reply.code(409).send({ error: 'Sellers cannot bid on their own auctions' });
+    }
+    if (auction.ends_at.getTime() <= Date.now()) {
+      return reply.code(409).send({ error: 'This auction has ended' });
+    }
+
+    const minimumBidCents = auction.current_price_cents + 100;
+    if (body.data.amountCents < minimumBidCents) {
+      return reply.code(409).send({
+        error: 'Bid must be at least $1 above the current amount',
+        minimumBidCents,
+      });
+    }
+
+    const inserted = await pool.query<{ id: string; amount_cents: number; created_at: Date }>(
+      `INSERT INTO bids (auction_id, bidder_user_id, amount_cents)
+       VALUES ($1, $2, $3)
+       RETURNING id::text, amount_cents, created_at`,
+      [auction.id, bidder.id, body.data.amountCents],
+    );
+    return reply.code(201).send(toBid({
+      ...inserted.rows[0],
+      bidder_id: bidder.id,
+      bidder_display_name: bidder.display_name,
+      bidder_handle: bidder.handle,
+    }));
   });
 
   app.addHook('onClose', async () => pool.end());

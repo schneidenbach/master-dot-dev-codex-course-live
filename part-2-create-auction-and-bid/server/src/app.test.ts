@@ -5,12 +5,13 @@ import { buildApp } from './app.js';
 const app = buildApp();
 const connectionString = process.env.DATABASE_URL ?? 'postgres://auction:auction@localhost:55432/auction_part_2';
 const testTitle = 'Vitest liquid cooling manifold';
+const bidTestTitle = 'Vitest bid target accelerator';
 
 async function removeTestAuction() {
   const client = new pg.Client({ connectionString });
   await client.connect();
   try {
-    await client.query('DELETE FROM auctions WHERE title = $1', [testTitle]);
+    await client.query('DELETE FROM auctions WHERE title = ANY($1::text[])', [[testTitle, bidTestTitle]]);
   } finally {
     await client.end();
   }
@@ -116,5 +117,79 @@ describe('marketplace read API', () => {
       seller: { id: 10, displayName: 'Marcus Green' },
       specs: [],
     });
+  });
+
+  it('rejects invalid bidders and amounts, then stores accepted bid history', async () => {
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/auctions',
+      payload: {
+        userId: 10,
+        title: bidTestTitle,
+        category: 'GPUs',
+        description: 'A dedicated accelerator listing used to verify sequential bid behavior.',
+        condition: 'Used · Fully tested',
+        location: 'Des Moines, IA',
+        startingPriceCents: 200000,
+        endsAt: new Date(Date.now() + 86_400_000).toISOString(),
+      },
+    });
+    expect(createResponse.statusCode).toBe(201);
+    const slug = createResponse.json().slug as string;
+
+    const selfBid = await app.inject({
+      method: 'POST', url: `/api/auctions/${slug}/bids`,
+      payload: { userId: 10, amountCents: 200100 },
+    });
+    expect(selfBid.statusCode).toBe(409);
+
+    const lowBid = await app.inject({
+      method: 'POST', url: `/api/auctions/${slug}/bids`,
+      payload: { userId: 9, amountCents: 200099 },
+    });
+    expect(lowBid.statusCode).toBe(409);
+    expect(lowBid.json()).toMatchObject({ minimumBidCents: 200100 });
+
+    const firstBid = await app.inject({
+      method: 'POST', url: `/api/auctions/${slug}/bids`,
+      payload: { userId: 9, amountCents: 200100 },
+    });
+    expect(firstBid.statusCode).toBe(201);
+    expect(firstBid.json()).toMatchObject({
+      amountCents: 200100,
+      bidder: { id: 9, displayName: 'Zoe Patel' },
+    });
+
+    const secondBid = await app.inject({
+      method: 'POST', url: `/api/auctions/${slug}/bids`,
+      payload: { userId: 8, amountCents: 200300 },
+    });
+    expect(secondBid.statusCode).toBe(201);
+
+    const detail = await app.inject({ method: 'GET', url: `/api/auctions/${slug}` });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({
+      currentPriceCents: 200300,
+      bidCount: 2,
+      currentBidder: 'eli',
+      bidHistory: [
+        { amountCents: 200300, bidder: { id: 8, displayName: 'Eli Martin' } },
+        { amountCents: 200100, bidder: { id: 9, displayName: 'Zoe Patel' } },
+      ],
+    });
+
+    const client = new pg.Client({ connectionString });
+    await client.connect();
+    try {
+      await client.query('UPDATE auctions SET ends_at = now() - interval \'1 minute\' WHERE slug = $1', [slug]);
+    } finally {
+      await client.end();
+    }
+    const endedBid = await app.inject({
+      method: 'POST', url: `/api/auctions/${slug}/bids`,
+      payload: { userId: 7, amountCents: 200500 },
+    });
+    expect(endedBid.statusCode).toBe(409);
+    expect(endedBid.json()).toMatchObject({ error: 'This auction has ended' });
   });
 });

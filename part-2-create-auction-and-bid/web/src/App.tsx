@@ -9,9 +9,10 @@ import {
   formatCurrency,
   formatTimeLeft,
 } from './catalog';
+import { BidForm } from './components/BidForm';
+import { NewAuctionPage } from './components/NewAuctionPage';
 import { ProductArt } from './components/ProductArt';
 import { ProductCard } from './components/ProductCard';
-import { NewAuctionPage } from './components/NewAuctionPage';
 import { SiteHeader } from './components/SiteHeader';
 import { activeUserStorageKey, UserSwitcher } from './components/UserSwitcher';
 
@@ -40,20 +41,31 @@ function SearchPage({ query }: { query: string }) {
   return <main className="search-page container"><div className="breadcrumbs"><a href="/">Home</a><span>/</span><span>Search</span></div><div className="search-heading"><div><p className="eyebrow">Catalog</p><h1>{query ? `Results for “${query}”` : 'All auctions'}</h1><p>{items ? `${items.length} live ${items.length === 1 ? 'auction' : 'auctions'}` : 'Searching…'}</p></div><select aria-label="Sort auctions" defaultValue="ending"><option value="ending">Ending soonest</option><option>Price: low to high</option><option>Most bids</option></select></div>{error ? <Status message={error} error /> : !items ? <Status message="Searching auctions…" /> : items.length ? <div className="product-grid search-results">{items.map((item) => <ProductCard key={item.slug} item={item} />)}</div> : <div className="empty-state"><h2>No equipment found</h2><p>Try a broader term, like “GPU” or “memory.”</p><a href="/search">View all auctions</a></div>}</main>;
 }
 
-function ItemPage({ slug }: { slug: string }) {
+function BidHistory({ item }: { item: AuctionItem }) {
+  const bids = item.bidHistory ?? [];
+  return <section className="bid-history-section"><div className="bid-history-heading"><div><p className="eyebrow">Activity</p><h2>Bid history</h2></div><span>{bids.length} accepted {bids.length === 1 ? 'bid' : 'bids'}</span></div>{bids.length ? <div className="bid-history-list">{bids.map((bid) => <article key={bid.id}><span className="bid-history-avatar">{bid.bidder.displayName.charAt(0)}</span><div><strong>{bid.bidder.displayName}</strong><span>@{bid.bidder.handle}</span></div><div><strong>{formatCurrency(bid.amountCents)}</strong><time dateTime={bid.createdAt}>{new Date(bid.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</time></div></article>)}</div> : <div className="bid-history-empty"><strong>No bids yet</strong><span>Be the first bidder on this equipment.</span></div>}</section>;
+}
+
+function ItemPage({ slug, activeUser }: { slug: string; activeUser: DemoUser | null }) {
   const [item, setItem] = useState<AuctionItem | null>(null);
   const [error, setError] = useState('');
+
+  async function loadAuction() {
+    const auction = await fetchAuction(slug);
+    setItem(auction);
+    document.title = `${auction.title} · Auction House`;
+  }
+
   useEffect(() => {
-    void fetchAuction(slug).then((auction) => {
-      setItem(auction);
-      document.title = `${auction.title} · Auction House`;
-    }).catch(() => setError('Auction not found or unavailable.'));
+    setError('');
+    void loadAuction().catch(() => setError('Auction not found or unavailable.'));
   }, [slug]);
 
   if (error) return <Status message={error} error />;
   if (!item) return <Status message="Loading auction…" />;
   const timeLeft = formatTimeLeft(item.endsAt);
-  return <main className="item-page container"><div className="breadcrumbs"><a href="/">Home</a><span>/</span><a href={`/search?q=${encodeURIComponent(item.category)}`}>{item.category}</a><span>/</span><span>{item.title}</span></div><div className="item-layout"><div className="item-gallery"><ProductArt kind={item.art} label={`Illustration of ${item.title}`} /><div className="thumbnail-row"><button className="selected"><ProductArt kind={item.art} label="Main view" /></button><button><span>+</span><small>More photos soon</small></button></div></div><section className="item-summary"><p className="product-category">{item.category} · {item.condition}</p><h1>{item.title}</h1><p className="item-kicker">{item.kicker}</p><div className="auction-panel"><div className="current-price"><span>{item.bidCount ? 'Current bid' : 'Starting price'}</span><strong>{formatCurrency(item.currentPriceCents)}</strong><small>{item.bidCount} {item.bidCount === 1 ? 'bid' : 'bids'}</small></div><div className="bidder"><span>Current bidder</span><strong>{item.currentBidder ? `@${item.currentBidder}` : 'No bids yet'}</strong></div><div className="ending"><span>Time left</span><strong>{timeLeft}</strong></div><form className="bid-form" onSubmit={(event) => event.preventDefault()}><label htmlFor="bid">Your maximum bid</label><div><span>$</span><input id="bid" inputMode="decimal" placeholder={String(item.currentPriceCents / 100 + 100)} /><button>Place bid</button></div></form></div><div className="seller-card"><span className="seller-avatar">{item.seller.displayName.charAt(0)}</span><div><small>Sold by</small><strong>{item.seller.displayName}</strong><span>@{item.seller.handle} · {item.location}</span></div></div></section></div><div className={`item-details-grid${item.specs.length ? '' : ' details-only'}`}><section><p className="eyebrow">About this item</p><h2>The details</h2><p>{item.description}</p></section>{item.specs.length > 0 && <section className="spec-list"><p className="eyebrow">Specifications</p>{item.specs.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>}</div></main>;
+
+  return <main className="item-page container"><div className="breadcrumbs"><a href="/">Home</a><span>/</span><a href={`/search?q=${encodeURIComponent(item.category)}`}>{item.category}</a><span>/</span><span>{item.title}</span></div><div className="item-layout"><div className="item-gallery"><ProductArt kind={item.art} label={`Illustration of ${item.title}`} /><div className="thumbnail-row"><button className="selected"><ProductArt kind={item.art} label="Main view" /></button><button><span>+</span><small>More photos soon</small></button></div></div><section className="item-summary"><p className="product-category">{item.category} · {item.condition}</p><h1>{item.title}</h1><p className="item-kicker">{item.kicker}</p><div className="auction-panel"><div className="current-price"><span>{item.bidCount ? 'Current bid' : 'Starting price'}</span><strong>{formatCurrency(item.currentPriceCents)}</strong><small>{item.bidCount} {item.bidCount === 1 ? 'bid' : 'bids'}</small></div><div className="bidder"><span>Current bidder</span><strong>{item.currentBidder ? `@${item.currentBidder}` : 'No bids yet'}</strong></div><div className="ending"><span>Time left</span><strong>{timeLeft}</strong></div><BidForm item={item} activeUser={activeUser} onAccepted={loadAuction} /></div><div className="seller-card"><span className="seller-avatar">{item.seller.displayName.charAt(0)}</span><div><small>Sold by</small><strong>{item.seller.displayName}</strong><span>@{item.seller.handle} · {item.location}</span></div></div></section></div><BidHistory item={item} /><div className={`item-details-grid${item.specs.length ? '' : ' details-only'}`}><section><p className="eyebrow">About this item</p><h2>The details</h2><p>{item.description}</p></section>{item.specs.length > 0 && <section className="spec-list"><p className="eyebrow">Specifications</p>{item.specs.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>}</div></main>;
 }
 
 export function App() {
@@ -87,6 +99,6 @@ export function App() {
   let page = <HomePage />;
   if (path === '/search') page = <SearchPage query={query} />;
   if (path === '/auctions/new') page = <NewAuctionPage activeUser={activeUser} />;
-  if (path.startsWith('/items/')) page = <ItemPage slug={decodeURIComponent(path.slice('/items/'.length))} />;
+  if (path.startsWith('/items/')) page = <ItemPage slug={decodeURIComponent(path.slice('/items/'.length))} activeUser={activeUser} />;
   return <div className="app-shell"><SiteHeader initialQuery={query} activeUser={activeUser} />{page}<footer><div className="container"><span>Auction House</span><span className="footer-note">Database-backed demo marketplace</span><UserSwitcher users={users} activeUserId={activeUserId} error={userError} onChange={switchUser} /></div></footer></div>;
 }
