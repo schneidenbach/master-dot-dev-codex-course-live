@@ -1,0 +1,24 @@
+{
+  "name": "auction-house",
+  "private": true,
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "db:up": "../scripts/workshop-db up auction_part_6",
+    "db:down": "../scripts/workshop-db drop auction_part_6",
+    "db:reset": "npm run db:down && npm run db:up && npm run migrate",
+    "redis:up": "docker compose -f ../docker-compose.yml up -d --wait redis",
+    "rabbitmq:up": "docker compose -f ../docker-compose.yml up -d --wait rabbitmq",
+    "migrate": "DATABASE_URL=postgres://auction:auction@localhost:55432/auction_part_6 npm run migrate --workspace server",
+    "dev": "API_PORT=3106 WEB_PORT=5106 DATABASE_URL=postgres://auction:auction@localhost:55432/auction_part_6 REDIS_URL=redis://localhost:56379 RABBITMQ_URL=amqp://auction:auction@localhost:56726 concurrently -k -n api,close-worker,notification-worker,web \"npm run dev --workspace server\" \"npm run dev:close-worker --workspace server\" \"npm run dev:notification-worker --workspace server\" \"npm run dev --workspace web\"",
+    "start": "npm run db:up && npm run redis:up && npm run rabbitmq:up && npm run migrate && npm run dev",
+    "test:bidding-war": "playwright test tests/bidding-war.spec.ts --headed --project=edge",
+    "test": "DATABASE_URL=postgres://auction:auction@localhost:55432/auction_part_6 npm run test --workspace server && npm run test --workspace web"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "concurrently": "^9.2.1"
+  }
+}
