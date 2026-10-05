@@ -1,6 +1,8 @@
 import type { Channel, ConfirmChannel } from 'amqplib';
-import pg from 'pg';
+import { asc, inArray, isNull } from 'drizzle-orm';
 import { auctionClosedEventSchema } from './auctionClose.js';
+import type { Database } from './db/index.js';
+import { outboxEvents } from './db/schema.js';
 
 export const auctionEventsExchange = 'auction.events';
 export const auctionNotificationsQueue = 'auction.notifications';
@@ -17,19 +19,13 @@ export async function ensureAuctionEventTopology(
     auctionClosedRoutingKey,
   );
 }
-
-type OutboxRow = {
-  id: string;
-  payload: unknown;
-};
-
 export async function publishPendingOutbox({
-  pool,
+  db,
   channel,
   now,
   batchSize = 50,
 }: {
-  pool: pg.Pool;
+  db: Database;
   channel: ConfirmChannel;
   now: Date;
   batchSize?: number;
@@ -38,24 +34,16 @@ export async function publishPendingOutbox({
     throw new RangeError('batchSize must be an integer between 1 and 500');
   }
 
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const pending = await client.query<OutboxRow>(
-      `SELECT id::text, payload
-       FROM outbox_events
-       WHERE published_at IS NULL
-       ORDER BY occurred_at, id
-       FOR UPDATE SKIP LOCKED
-       LIMIT $1`,
-      [batchSize],
-    );
-    if (pending.rows.length === 0) {
-      await client.query('COMMIT');
-      return [];
-    }
+  return db.transaction(async (tx) => {
+    const pending = await tx.select({ id: outboxEvents.id, payload: outboxEvents.payload })
+      .from(outboxEvents)
+      .where(isNull(outboxEvents.publishedAt))
+      .orderBy(asc(outboxEvents.occurredAt), asc(outboxEvents.id))
+      .limit(batchSize)
+      .for('update', { skipLocked: true });
+    if (pending.length === 0) return [];
 
-    for (const row of pending.rows) {
+    for (const row of pending) {
       const event = auctionClosedEventSchema.parse(row.payload);
       channel.publish(
         auctionEventsExchange,
@@ -72,19 +60,10 @@ export async function publishPendingOutbox({
     }
     await channel.waitForConfirms();
 
-    const eventIds = pending.rows.map((row) => row.id);
-    await client.query(
-      `UPDATE outbox_events
-       SET published_at = $1
-       WHERE id = ANY($2::uuid[])`,
-      [now, eventIds],
-    );
-    await client.query('COMMIT');
+    const eventIds = pending.map((row) => row.id);
+    await tx.update(outboxEvents)
+      .set({ publishedAt: now })
+      .where(inArray(outboxEvents.id, eventIds));
     return eventIds;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }

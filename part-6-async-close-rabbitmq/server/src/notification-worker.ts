@@ -1,9 +1,9 @@
 import './otel.js';
 import * as amqp from 'amqplib';
 import { Emitter } from '@socket.io/redis-emitter';
-import pg from 'pg';
 import { createClient } from 'redis';
 import { auctionClosedEventSchema } from './auctionClose.js';
+import { createDatabase } from './db/index.js';
 import { deliverAuctionOutcome } from './notificationDelivery.js';
 import {
   auctionNotificationsQueue,
@@ -16,7 +16,7 @@ const connectionString = process.env.DATABASE_URL
 const rabbitmqUrl = process.env.RABBITMQ_URL ?? 'amqp://auction:auction@localhost:56726';
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:56379';
 
-const pool = new pg.Pool({ connectionString, connectionTimeoutMillis: 1_000 });
+const { db, pool } = createDatabase(connectionString);
 const redis = createClient({ url: redisUrl });
 redis.on('error', (error) => console.error('Notification Redis error', error));
 await redis.connect();
@@ -48,7 +48,7 @@ const { consumerTag } = await channel.consume(auctionNotificationsQueue, (messag
 
     try {
       await deliverAuctionOutcome({
-        pool,
+        db,
         event: parsed.data,
         now: new Date(),
         emit: (userId, notification) => {

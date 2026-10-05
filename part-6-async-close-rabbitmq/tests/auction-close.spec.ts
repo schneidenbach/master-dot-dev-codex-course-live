@@ -1,11 +1,13 @@
 import { expect, test } from '@playwright/test';
-import pg from 'pg';
+import { eq, inArray } from 'drizzle-orm';
+import { createDatabase } from '../server/src/db/index.js';
+import { auctions } from '../server/src/db/schema.js';
 
 const databaseURL = process.env.DATABASE_URL
   ?? 'postgres://auction:auction@127.0.0.1:55432/auction_part_6';
 
 test('due auctions converge to authoritative winner and no-bid outcomes', async ({ page, request }) => {
-  const database = new pg.Pool({ connectionString: databaseURL });
+  const { db, pool } = createDatabase(databaseURL);
   const slugs: string[] = [];
   await page.addInitScript(() => {
     window.sessionStorage.setItem('auction-house-active-user-id', '8');
@@ -36,10 +38,9 @@ test('due auctions converge to authoritative winner and no-bid outcomes', async 
       data: { userId: 9, amountCents: 50_100 },
     });
     expect(bid.status()).toBe(201);
-    await database.query(
-      'UPDATE auctions SET ends_at = $1 WHERE slug = $2',
-      [new Date(Date.now() + 1_500), winnerSlug],
-    );
+    await db.update(auctions)
+      .set({ endsAt: new Date(Date.now() + 1_500) })
+      .where(eq(auctions.slug, winnerSlug));
 
     await page.goto(`/items/${winnerSlug}`);
     await expect(page.getByRole('heading', { name: 'Browser close outcome GPU' })).toBeVisible();
@@ -50,10 +51,9 @@ test('due auctions converge to authoritative winner and no-bid outcomes', async 
     await expect(page.locator('.bid-guidance')).toHaveText('Bidding has ended.');
 
     const noBidSlug = await createAuction('Browser no-bid close GPU');
-    await database.query(
-      'UPDATE auctions SET ends_at = $1 WHERE slug = $2',
-      [new Date(Date.now() + 1_500), noBidSlug],
-    );
+    await db.update(auctions)
+      .set({ endsAt: new Date(Date.now() + 1_500) })
+      .where(eq(auctions.slug, noBidSlug));
 
     await page.goto(`/items/${noBidSlug}`);
     const noBidOutcome = page.locator('.auction-outcome');
@@ -61,7 +61,7 @@ test('due auctions converge to authoritative winner and no-bid outcomes', async 
     await expect(noBidOutcome).toContainText('Ended without bids');
     await expect(page.locator('.current-price > span')).toHaveText('Final price');
   } finally {
-    await database.query('DELETE FROM auctions WHERE slug = ANY($1::text[])', [slugs]);
-    await database.end();
+    if (slugs.length > 0) await db.delete(auctions).where(inArray(auctions.slug, slugs));
+    await pool.end();
   }
 });

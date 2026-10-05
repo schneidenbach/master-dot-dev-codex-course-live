@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import pg from 'pg';
+import { and, asc, desc, eq, isNull, lte } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
+import type { Database } from './db/index.js';
+import { auctionCloses, auctions, bids, outboxEvents, users } from './db/schema.js';
 
 export const auctionClosedEventSchema = z.object({
   eventId: z.string().uuid(),
@@ -33,30 +36,12 @@ export type ClosedAuction = {
   outboxEventId: string;
 };
 
-type DueAuctionRow = {
-  id: string;
-  slug: string;
-  title: string;
-  ends_at: Date;
-  seller_id: number;
-  seller_display_name: string;
-  seller_handle: string;
-};
-
-type WinningBidRow = {
-  id: string;
-  amount_cents: number;
-  bidder_id: number;
-  bidder_display_name: string;
-  bidder_handle: string;
-};
-
 export async function closeDueAuctions({
-  pool,
+  db,
   now,
   batchSize = 50,
 }: {
-  pool: pg.Pool;
+  db: Database;
   now: Date;
   batchSize?: number;
 }): Promise<ClosedAuction[]> {
@@ -64,86 +49,82 @@ export async function closeDueAuctions({
     throw new RangeError('batchSize must be an integer between 1 and 500');
   }
 
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const due = await client.query<DueAuctionRow>(
-      `SELECT a.id::text, a.slug, a.title, a.ends_at,
-         seller.id AS seller_id, seller.display_name AS seller_display_name,
-         seller.handle AS seller_handle
-       FROM auctions a
-       JOIN users seller ON seller.id = a.seller_user_id
-       WHERE a.ends_at <= $1
-         AND NOT EXISTS (
-           SELECT 1 FROM auction_closes close WHERE close.auction_id = a.id
-         )
-       ORDER BY a.ends_at, a.id
-       FOR UPDATE OF a SKIP LOCKED
-       LIMIT $2`,
-      [now, batchSize],
-    );
+  return db.transaction(async (tx) => {
+    const seller = alias(users, 'seller');
+    const due = await tx.select({
+      id: auctions.id,
+      slug: auctions.slug,
+      title: auctions.title,
+      endsAt: auctions.endsAt,
+      sellerId: seller.id,
+      sellerDisplayName: seller.displayName,
+      sellerHandle: seller.handle,
+    })
+      .from(auctions)
+      .innerJoin(seller, eq(seller.id, auctions.sellerUserId))
+      .leftJoin(auctionCloses, eq(auctionCloses.auctionId, auctions.id))
+      .where(and(lte(auctions.endsAt, now), isNull(auctionCloses.auctionId)))
+      .orderBy(asc(auctions.endsAt), asc(auctions.id))
+      .limit(batchSize)
+      .for('update', { of: auctions, skipLocked: true });
 
     const closed: ClosedAuction[] = [];
-    for (const auction of due.rows) {
-      const winnerResult = await client.query<WinningBidRow>(
-        `SELECT b.id::text, b.amount_cents,
-           bidder.id AS bidder_id, bidder.display_name AS bidder_display_name,
-           bidder.handle AS bidder_handle
-         FROM bids b
-         JOIN users bidder ON bidder.id = b.bidder_user_id
-         WHERE b.auction_id = $1
-         ORDER BY b.amount_cents DESC, b.created_at ASC, b.id ASC
-         LIMIT 1`,
-        [auction.id],
-      );
-      const winner = winnerResult.rows[0] ?? null;
+    for (const auction of due) {
+      const bidder = alias(users, 'bidder');
+      const [winner] = await tx.select({
+        id: bids.id,
+        amountCents: bids.amountCents,
+        bidderId: bidder.id,
+        bidderDisplayName: bidder.displayName,
+        bidderHandle: bidder.handle,
+      })
+        .from(bids)
+        .innerJoin(bidder, eq(bidder.id, bids.bidderUserId))
+        .where(eq(bids.auctionId, auction.id))
+        .orderBy(desc(bids.amountCents), asc(bids.createdAt), asc(bids.id))
+        .limit(1);
       const eventId = randomUUID();
       const event: AuctionClosedEvent = {
         eventId,
         eventType: 'AuctionClosed',
-        auctionId: auction.id,
+        auctionId: auction.id.toString(),
         slug: auction.slug,
         title: auction.title,
-        endsAt: auction.ends_at.toISOString(),
+        endsAt: auction.endsAt.toISOString(),
         closedAt: now.toISOString(),
         seller: {
-          id: auction.seller_id,
-          displayName: auction.seller_display_name,
-          handle: auction.seller_handle,
+          id: auction.sellerId,
+          displayName: auction.sellerDisplayName,
+          handle: auction.sellerHandle,
         },
         winner: winner ? {
-          bidId: winner.id,
-          userId: winner.bidder_id,
-          displayName: winner.bidder_display_name,
-          handle: winner.bidder_handle,
-          amountCents: winner.amount_cents,
+          bidId: winner.id.toString(),
+          userId: winner.bidderId,
+          displayName: winner.bidderDisplayName,
+          handle: winner.bidderHandle,
+          amountCents: winner.amountCents,
         } : null,
       };
 
-      await client.query(
-        `INSERT INTO auction_closes (auction_id, closed_at, winning_bid_id)
-         VALUES ($1, $2, $3)`,
-        [auction.id, now, winner?.id ?? null],
-      );
-      await client.query(
-        `INSERT INTO outbox_events (id, event_type, auction_id, payload, occurred_at)
-         VALUES ($1, 'AuctionClosed', $2, $3::jsonb, $4)`,
-        [eventId, auction.id, JSON.stringify(event), now],
-      );
-      closed.push({
+      await tx.insert(auctionCloses).values({
         auctionId: auction.id,
-        slug: auction.slug,
+        closedAt: now,
         winningBidId: winner?.id ?? null,
+      });
+      await tx.insert(outboxEvents).values({
+        id: eventId,
+        eventType: 'AuctionClosed',
+        auctionId: auction.id,
+        payload: event,
+        occurredAt: now,
+      });
+      closed.push({
+        auctionId: auction.id.toString(),
+        slug: auction.slug,
+        winningBidId: winner?.id.toString() ?? null,
         outboxEventId: eventId,
       });
     }
-
-    await client.query('COMMIT');
     return closed;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }

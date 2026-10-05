@@ -1,43 +1,48 @@
-import pg from 'pg';
+import { eq, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { closeDueAuctions, type AuctionClosedEvent } from './auctionClose.js';
+import { auctionClosedEventSchema, closeDueAuctions, type AuctionClosedEvent } from './auctionClose.js';
+import { createDatabase } from './db/index.js';
+import { auctions, bids, outboxEvents } from './db/schema.js';
 import { deliverAuctionOutcome, type OutcomeNotification } from './notificationDelivery.js';
 
 const connectionString = process.env.DATABASE_URL
   ?? 'postgres://auction:auction@localhost:55432/auction_part_6';
-const pool = new pg.Pool({ connectionString });
+const { db, pool } = createDatabase(connectionString);
 const titlePrefix = 'Vitest notification delivery';
 
 async function removeTestAuctions() {
-  await pool.query('DELETE FROM auctions WHERE title LIKE $1', [`${titlePrefix}%`]);
+  await db.delete(auctions).where(like(auctions.title, `${titlePrefix}%`));
 }
 
 async function createCloseEvent(suffix: string, withWinner: boolean): Promise<AuctionClosedEvent> {
   const now = new Date();
-  const auction = await pool.query<{ id: string }>(
-    `INSERT INTO auctions (
-       slug, seller_user_id, title, kicker, category, art, starting_price_cents,
-       ends_at, location, condition, description, specs
-     ) VALUES ($1, 1, $2, '', 'GPUs', 'gpu', 10000, $3,
-       'Chicago, IL', 'Bench tested', 'A deterministic notification delivery test listing.',
-       '[]'::jsonb)
-     RETURNING id::text`,
-    [`vitest-delivery-${suffix}`, `${titlePrefix} ${suffix}`, now],
-  );
+  const [auction] = await db.insert(auctions).values({
+    slug: `vitest-delivery-${suffix}`,
+    sellerUserId: 1,
+    title: `${titlePrefix} ${suffix}`,
+    category: 'GPUs',
+    art: 'gpu',
+    startingPriceCents: 10_000,
+    endsAt: now,
+    location: 'Chicago, IL',
+    condition: 'Bench tested',
+    description: 'A deterministic notification delivery test listing.',
+    specs: [],
+  }).returning({ id: auctions.id });
   if (withWinner) {
-    await pool.query(
-      `INSERT INTO bids (auction_id, bidder_user_id, amount_cents, created_at)
-       VALUES ($1, 2, 10100, $2)`,
-      [auction.rows[0].id, new Date(now.getTime() - 1_000)],
-    );
+    await db.insert(bids).values({
+      auctionId: auction.id,
+      bidderUserId: 2,
+      amountCents: 10_100,
+      createdAt: new Date(now.getTime() - 1_000),
+    });
   }
-  await closeDueAuctions({ pool, now });
+  await closeDueAuctions({ db, now });
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const result = await pool.query<{ payload: AuctionClosedEvent }>(
-      'SELECT payload FROM outbox_events WHERE auction_id = $1',
-      [auction.rows[0].id],
-    );
-    if (result.rows[0]) return result.rows[0].payload;
+    const [result] = await db.select({ payload: outboxEvents.payload })
+      .from(outboxEvents)
+      .where(eq(outboxEvents.auctionId, auction.id));
+    if (result) return auctionClosedEventSchema.parse(result.payload);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error('Auction close event was not created');
@@ -48,7 +53,6 @@ afterAll(async () => {
   await removeTestAuctions();
   await pool.end();
 });
-
 describe('idempotent outcome delivery', () => {
   it('creates and emits one stable delivery for the seller and winner', async () => {
     const event = await createCloseEvent('winner', true);
@@ -57,8 +61,8 @@ describe('idempotent outcome delivery', () => {
       emissions.push({ userId, notification });
     });
 
-    const first = await deliverAuctionOutcome({ pool, event, now: new Date(), emit });
-    const second = await deliverAuctionOutcome({ pool, event, now: new Date(), emit });
+    const first = await deliverAuctionOutcome({ db, event, now: new Date(), emit });
+    const second = await deliverAuctionOutcome({ db, event, now: new Date(), emit });
 
     expect(first).toHaveLength(2);
     expect(second).toEqual([]);
@@ -74,7 +78,7 @@ describe('idempotent outcome delivery', () => {
     const emissions: OutcomeNotification[] = [];
 
     await deliverAuctionOutcome({
-      pool,
+      db,
       event,
       now: new Date(),
       emit: (_userId, notification) => { emissions.push(notification); },
@@ -88,7 +92,7 @@ describe('idempotent outcome delivery', () => {
     const event = await createCloseEvent('emission-gap', false);
     let firstNotificationId = '';
     await expect(deliverAuctionOutcome({
-      pool,
+      db,
       event,
       now: new Date(),
       emit: (_userId, notification) => {
@@ -99,7 +103,7 @@ describe('idempotent outcome delivery', () => {
 
     const retriedIds: string[] = [];
     await deliverAuctionOutcome({
-      pool,
+      db,
       event,
       now: new Date(),
       emit: (_userId, notification) => { retriedIds.push(notification.notificationId); },

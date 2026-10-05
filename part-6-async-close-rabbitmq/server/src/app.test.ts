@@ -1,13 +1,16 @@
-import pg from 'pg';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
 import { closeDueAuctions } from './auctionClose.js';
+import { createDatabase } from './db/index.js';
+import { auctions } from './db/schema.js';
 
 const publishedEvents: Array<{ slug: string; bidId: string }> = [];
 const app = buildApp({ publishAuctionChanged: (event) => publishedEvents.push(event) });
 let clockNow = new Date('2035-01-01T00:00:00.000Z');
 const clockApp = buildApp({ clock: { now: () => new Date(clockNow) } });
 const connectionString = process.env.DATABASE_URL ?? 'postgres://auction:auction@localhost:55432/auction_part_6';
+const { db: testDb, pool: testPool } = createDatabase(connectionString);
 const testTitle = 'Vitest liquid cooling manifold';
 const bidTestTitle = 'Vitest bid target accelerator';
 const concurrencyTestTitle = 'Vitest concurrent bid target';
@@ -15,30 +18,18 @@ const clockTestTitle = 'Vitest clock boundary target';
 const finalOutcomeTestTitle = 'Vitest final auction outcome';
 
 async function removeTestAuction() {
-  const client = new pg.Client({ connectionString });
-  await client.connect();
-  try {
-    await client.query('DELETE FROM auctions WHERE title = ANY($1::text[])', [[
-      testTitle,
-      bidTestTitle,
-      concurrencyTestTitle,
-      clockTestTitle,
-      finalOutcomeTestTitle,
-    ]]);
-  } finally {
-    await client.end();
-  }
+  await testDb.delete(auctions).where(inArray(auctions.title, [
+    testTitle,
+    bidTestTitle,
+    concurrencyTestTitle,
+    clockTestTitle,
+    finalOutcomeTestTitle,
+  ]));
 }
 
 async function removeConcurrencyDelay() {
-  const client = new pg.Client({ connectionString });
-  await client.connect();
-  try {
-    await client.query('DROP TRIGGER IF EXISTS vitest_concurrent_bid_delay ON bids');
-    await client.query('DROP FUNCTION IF EXISTS vitest_concurrent_bid_delay()');
-  } finally {
-    await client.end();
-  }
+  await testDb.execute(sql`DROP TRIGGER IF EXISTS vitest_concurrent_bid_delay ON bids`);
+  await testDb.execute(sql`DROP FUNCTION IF EXISTS vitest_concurrent_bid_delay()`);
 }
 
 beforeAll(async () => {
@@ -49,6 +40,7 @@ afterAll(async () => {
   await Promise.all([app.close(), clockApp.close()]);
   await removeConcurrencyDelay();
   await removeTestAuction();
+  await testPool.end();
 });
 
 describe('marketplace read API', () => {
@@ -127,13 +119,8 @@ describe('marketplace read API', () => {
     expect(bidResponse.statusCode).toBe(201);
 
     const closedAt = new Date();
-    const workerPool = new pg.Pool({ connectionString });
-    try {
-      await workerPool.query('UPDATE auctions SET ends_at = $1 WHERE slug = $2', [closedAt, slug]);
-      await closeDueAuctions({ pool: workerPool, now: closedAt });
-    } finally {
-      await workerPool.end();
-    }
+    await testDb.update(auctions).set({ endsAt: closedAt }).where(eq(auctions.slug, slug));
+    await closeDueAuctions({ db: testDb, now: closedAt });
 
     const detail = await app.inject({ method: 'GET', url: `/api/auctions/${slug}` });
     expect(detail.statusCode).toBe(200);
@@ -266,13 +253,9 @@ describe('marketplace read API', () => {
       ],
     });
 
-    const client = new pg.Client({ connectionString });
-    await client.connect();
-    try {
-      await client.query('UPDATE auctions SET ends_at = now() - interval \'1 minute\' WHERE slug = $1', [slug]);
-    } finally {
-      await client.end();
-    }
+    await testDb.update(auctions)
+      .set({ endsAt: new Date(Date.now() - 60_000) })
+      .where(eq(auctions.slug, slug));
     const endedBid = await app.inject({
       method: 'POST', url: `/api/auctions/${slug}/bids`,
       payload: { userId: 7, amountCents: 200500 },
@@ -306,10 +289,8 @@ describe('marketplace read API', () => {
     expect(createResponse.statusCode).toBe(201);
     const slug = createResponse.json().slug as string;
 
-    const client = new pg.Client({ connectionString });
-    await client.connect();
     try {
-      await client.query(`
+      await testDb.execute(sql`
         CREATE OR REPLACE FUNCTION vitest_concurrent_bid_delay() RETURNS trigger AS $$
         BEGIN
           IF EXISTS (
@@ -322,7 +303,7 @@ describe('marketplace read API', () => {
         END;
         $$ LANGUAGE plpgsql
       `);
-      await client.query(`
+      await testDb.execute(sql`
         CREATE TRIGGER vitest_concurrent_bid_delay
         BEFORE INSERT ON bids
         FOR EACH ROW EXECUTE FUNCTION vitest_concurrent_bid_delay()
@@ -365,9 +346,7 @@ describe('marketplace read API', () => {
         expect(acceptedAmounts[index - 1] - acceptedAmounts[index]).toBeGreaterThanOrEqual(100);
       }
     } finally {
-      await client.query('DROP TRIGGER IF EXISTS vitest_concurrent_bid_delay ON bids');
-      await client.query('DROP FUNCTION IF EXISTS vitest_concurrent_bid_delay()');
-      await client.end();
+      await removeConcurrencyDelay();
     }
   });
 
@@ -416,14 +395,20 @@ describe('marketplace read API', () => {
     expect(accepted.statusCode).toBe(201);
     expect(accepted.json()).toMatchObject({ createdAt: clockNow.toISOString() });
 
-    const blocker = new pg.Client({ connectionString });
-    await blocker.connect();
-    let transactionOpen = false;
+    let releaseLock!: () => void;
+    let reportLockAcquired!: () => void;
+    const releaseLockSignal = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const lockAcquiredSignal = new Promise<void>((resolve) => { reportLockAcquired = resolve; });
+    const blocker = testDb.transaction(async (tx) => {
+      await tx.select({ id: auctions.id })
+        .from(auctions)
+        .where(eq(auctions.slug, slug))
+        .for('update');
+      reportLockAcquired();
+      await releaseLockSignal;
+    });
+    await lockAcquiredSignal;
     try {
-      await blocker.query('BEGIN');
-      transactionOpen = true;
-      await blocker.query('SELECT id FROM auctions WHERE slug = $1 FOR UPDATE', [slug]);
-
       const waitingBid = clockApp.inject({
         method: 'POST',
         url: `/api/auctions/${slug}/bids`,
@@ -432,23 +417,23 @@ describe('marketplace read API', () => {
 
       let lockWaitObserved = false;
       for (let attempt = 0; attempt < 50 && !lockWaitObserved; attempt += 1) {
-        const waiting = await blocker.query<{ waiting: boolean }>(
-          `SELECT EXISTS (
+        const waiting = await testDb.execute<{ waiting: boolean }>(sql`
+          SELECT EXISTS (
              SELECT 1 FROM pg_stat_activity
              WHERE datname = current_database()
                AND pid <> pg_backend_pid()
                AND wait_event_type = 'Lock'
                AND cardinality(pg_blocking_pids(pid)) > 0
-           ) AS waiting`,
-        );
+           ) AS waiting
+        `);
         lockWaitObserved = waiting.rows[0].waiting;
         if (!lockWaitObserved) await new Promise((resolve) => setTimeout(resolve, 10));
       }
       expect(lockWaitObserved).toBe(true);
 
       clockNow = new Date(endsAt);
-      await blocker.query('COMMIT');
-      transactionOpen = false;
+      releaseLock();
+      await blocker;
 
       const closed = await waitingBid;
       expect(closed.statusCode).toBe(409);
@@ -459,8 +444,8 @@ describe('marketplace read API', () => {
         endsAt: endsAt.toISOString(),
       });
     } finally {
-      if (transactionOpen) await blocker.query('ROLLBACK');
-      await blocker.end();
+      releaseLock();
+      await blocker;
     }
 
     const detail = await clockApp.inject({ method: 'GET', url: `/api/auctions/${slug}` });

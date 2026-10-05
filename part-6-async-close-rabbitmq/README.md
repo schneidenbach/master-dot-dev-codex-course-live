@@ -10,6 +10,10 @@ npm start
 Close Worker, Notification Worker, and web app. Open <http://localhost:5106> (API
 <http://localhost:3106>).
 
+The API and both workers share a typed Drizzle schema over the `pg` driver. Drizzle owns
+queries, transactions, row locking, worker batch claims, and migration execution across every
+service. Schema changes remain explicit, ordered SQL migrations applied by Drizzle's migrator.
+
 Auction detail pages use WebSocket-only Socket.IO connections. Accepted bids continue to
 use the transactional HTTP endpoint; after commit, a Redis-backed room notification causes
 each open detail page to refetch the authoritative auction state.
