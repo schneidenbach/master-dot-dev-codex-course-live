@@ -1,7 +1,6 @@
-# Codex Workshop — Live Auction Platform
+# Fullstack Codex Course — Master.dev
 
-Demo app for the Codex full-stack/backend workshop: a live auction site built as
-**vertical slices**, one folder per part. Every line of app code was written by the
+Demo app for the [Build a Fullstack App with Codex](https://master.dev/courses/fullstack-app-codex) Codex fullstack course from [Master.dev](https://master.dev). The app is a live auction site built as **vertical slices**, one folder per part. Every line of app code was written by the
 Codex CLI (`codex exec`); each folder starts as a verbatim copy of the previous part
 and adds exactly one slice.
 
