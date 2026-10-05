@@ -66,3 +66,88 @@ the shared PostgreSQL container remains available for the other parts.
 
 After every demo is finished, run `docker compose down` from the repository root to stop the
 shared PostgreSQL container. Add `-v` only when you also want to delete every part's database.
+
+## Goals
+Before each `/grill me` session, Spencer reviews the goals of the feature being added. You can reference these goals to better direct your AI coding tool.
+
+**Auctions & Bidding**
+- Create and persist auctions within Postgres
+- Bid on auctions, store bids in Postgres
+- We need some concept of users as well
+
+**Business Rules and Concurrency**
+- Add in some value-added seller features (minimum bids)
+- Add in concurrency protection (via transaction locks in Postgres)
+- Add in stale bid protection
+- Add in BIDDING WARS test
+
+**Real-time UI Updates**
+- Make the UI update bids as bids come in, as opposed to requiring a refresh on the page
+- Introduce a bit of architectural complexity
+
+**Closing the Auction**
+- Model real-world architecture for triggering workflows
+  - Auction ends
+  - Event is broadcast to a backend service to trigger communication and checkout
+- Add observability
+
+**Checkout w/ Payments**
+- Auction ends, winning bidder makes payment
+
+## Prompts
+Below are the prompts used in each section of the course.
+
+**01-foundations**
+```md
+I would like to build an auction site. it's going to roughly model how other popular auction sites look online.
+please use React
+keep it to two routes right now:
+- Home page with auctions on it as well as some sample auctions (6)
+- separate route to actually view the auction\
+
+I'd like you to build it with three different looks/themes, have those available on the homepage, and let me click between them
+```
+
+**02-create-auction-and-bid**
+
+```md
+I want to add on the ability to post auctions and make bids. these should be stored in the postgres database (see the docker compose file - that's where the database should live). GRILL ME with DOCS!
+```
+
+
+**03-business-rules-concurrency**
+```md
+I'd like to add bidding concurrency protection, closed-auction checks to the backend (if they aren't there already, they might be), handling stale bids gracefully on the frontend
+
+grill me with docs
+```
+
+**04-realtime-socketio-redis**
+```md
+we want to make the frontend use websockets to update as soon as bids come through. we want to protect against when this app is distributed that the websockets will succeed. grill me with docs!
+```
+
+**05-hidden-defect-review**
+```md
+introduce a concurrency defect in the postgres bidding query, we're going to see if another LLM can find it
+```
+
+**06-async-close-rabbit**
+```md
+once the auction is in the past, I want to trigger a workflow for notifying the winning bid user that the auction has ended. we'll do that with a popup notification on the screen triggered by web socket. the service for polling the auction table for ended auctions will be separated from the service that actually handles and triggers notifications. they will be triggered and bound together via rabbit MQ.
+
+GRILL ME WITH DOCS!
+```
+
+**07-winner-checkout**
+```md
+I want to implement winner checkout using the mock Stripe service inside of this repo. please grill me with docs
+```
+
+**08-cross-stack-debugging**
+```md
+we want to add Jaeger for observability. please make it so that it's as little noise as possible inside of our spans and traces - high signal stuff only for the purposes of this workshop. focus on the auction checkout side of things- I want to see a trace that contains spans across auction bids, closes, and communication.
+
+Grill me shorter - just one round of questions please!
+```
+
